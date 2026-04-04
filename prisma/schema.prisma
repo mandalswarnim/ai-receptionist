@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CallStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  NO_ANSWER
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Call {
+  id          String       @id @default(uuid())
+  callSid     String       @unique
+  from        String
+  to          String
+  status      CallStatus   @default(IN_PROGRESS)
+  startedAt   DateTime     @default(now())
+  endedAt     DateTime?
+  duration    Int?         // seconds
+  recordingUrl String?
+  recordingSid String?
+
+  // Extracted caller info
+  callerName    String?
+  callerCompany String?
+  callerPhone   String?
+  callerEmail   String?
+  message       String?
+  urgency       UrgencyLevel?
+  summary       String?
+
+  // Full transcript
+  transcript    String?
+
+  // Email notification
+  emailSent     Boolean  @default(false)
+  emailSentAt   DateTime?
+
+  // Conversation turns
+  turns         ConversationTurn[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([callSid])
+  @@index([startedAt])
+  @@index([status])
+}
+
+model ConversationTurn {
+  id        String   @id @default(uuid())
+  callId    String
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  role      String   // "assistant" | "caller"
+  content   String
+  timestamp DateTime @default(now())
+  sequence  Int
+
+  @@index([callId])
+}
