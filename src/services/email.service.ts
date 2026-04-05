@@ -1,13 +1,28 @@
 /**
- * Email service: sends structured call summary emails via SendGrid.
+ * Email service: sends structured call summary emails via Gmail SMTP (Nodemailer).
  */
 
-import sgMail from '@sendgrid/mail';
+import nodemailer from 'nodemailer';
 import { config } from '../config';
 import { ExtractedCallData } from '../types';
 import { logger } from '../lib/logger';
 
-sgMail.setApiKey(config.SENDGRID_API_KEY);
+const transporter = nodemailer.createTransport({
+  host: config.SMTP_HOST,
+  port: parseInt(config.SMTP_PORT),
+  secure: false, // true for 465, false for 587 (STARTTLS)
+  auth: {
+    user: config.SMTP_USER,
+    pass: config.SMTP_PASS,
+  },
+});
+
+// Verify connection on startup
+transporter.verify().then(() => {
+  logger.info('SMTP connection verified', { host: config.SMTP_HOST, user: config.SMTP_USER });
+}).catch((err) => {
+  logger.error('SMTP connection failed', { err });
+});
 
 function formatTimestamp(date: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
@@ -140,20 +155,17 @@ export async function sendCallSummaryEmail(
   const callerDisplay = data.name || data.phone || 'Unknown Caller';
   const subject = `New Missed Call Message from ${callerDisplay}`;
 
-  const msg = {
-    to: config.RECEPTIONIST_EMAIL,
-    from: {
-      email: config.EMAIL_FROM,
-      name: config.EMAIL_FROM_NAME,
-    },
+  await transporter.sendMail({
+    from: `"${config.EMAIL_FROM_NAME}" <${config.SMTP_USER}>`,
+    to: config.BUSINESS_EMAIL,
     subject,
     text: buildTextEmail(data, callSid, timestamp),
     html: buildHtmlEmail(data, callSid, timestamp),
-  };
+  });
 
-  await sgMail.send(msg);
   logger.info('Call summary email sent', {
-    to: config.RECEPTIONIST_EMAIL,
+    from: config.SMTP_USER,
+    to: config.BUSINESS_EMAIL,
     callSid,
     caller: callerDisplay,
   });

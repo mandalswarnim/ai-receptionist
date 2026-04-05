@@ -1,8 +1,11 @@
 /**
  * Twilio webhook endpoints.
  *
- * POST /api/webhooks/incoming-call   — Twilio calls this when a new call arrives
- * POST /api/webhooks/dial-status     — Fires when the dial attempt ends
+ * Call flow:
+ *   Customer calls business → Business doesn't answer → Call forwarded to
+ *   our Twilio number → AI picks up immediately → Collects info → Emails business.
+ *
+ * POST /api/webhooks/incoming-call   — Twilio calls this when a forwarded call arrives
  * POST /api/webhooks/gather          — Fires each time the caller speaks
  * POST /api/webhooks/recording       — Fires when call recording is ready
  * POST /api/webhooks/call-status     — Fires on final call status change
@@ -14,7 +17,6 @@ import { config } from '../../config';
 import { logger } from '../../lib/logger';
 import {
   TwilioCallPayload,
-  TwilioDialStatusPayload,
   TwilioGatherPayload,
   TwilioRecordingPayload,
 } from '../../types';
@@ -53,58 +55,33 @@ function validateTwilioSignature(req: Request, res: Response, next: () => void):
 // Apply Twilio validation to all webhook routes
 router.use(validateTwilioSignature);
 
-// ─── 1. Incoming Call ────────────────────────────────────────────────────────
+// ─── 1. Incoming Call (forwarded from business) ──────────────────────────────
+//
+// The business phone didn't answer, so the call was forwarded to our Twilio
+// number. The AI picks up immediately — no further dial attempt needed.
 
 router.post('/incoming-call', async (req: Request, res: Response) => {
   const body = req.body as TwilioCallPayload;
   const { CallSid: callSid, From: from } = body;
 
-  logger.info('Incoming call received', { callSid, from });
+  logger.info('Forwarded call received — AI answering', { callSid, from });
 
   try {
-    // Record the call immediately
+    // Save initial record to DB
     await callSvc.createInitialCallRecord(callSid, from);
 
-    // Try to forward to human receptionist first
-    const twiml = twilioSvc.buildIncomingCallTwiml();
-
-    res.type('text/xml').send(twiml);
-  } catch (err) {
-    logger.error('Error handling incoming call', { callSid, err });
-    res.type('text/xml').send(twilioSvc.buildErrorTwiml());
-  }
-});
-
-// ─── 2. Dial Status Callback ─────────────────────────────────────────────────
-
-router.post('/dial-status', async (req: Request, res: Response) => {
-  const body = req.body as TwilioDialStatusPayload;
-  const { CallSid: callSid, From: from, DialCallStatus: dialStatus } = body;
-
-  logger.info('Dial status received', { callSid, dialStatus });
-
-  // If the receptionist answered, call is handled — nothing more to do
-  if (dialStatus === 'completed') {
-    logger.info('Receptionist answered — call transferred', { callSid });
-    res.type('text/xml').send('<Response></Response>');
-    return;
-  }
-
-  // Receptionist did not answer → AI takes over
-  logger.info('Receptionist unavailable — AI taking over', { callSid, dialStatus });
-
-  try {
-    // Start a conversation session
+    // Start a conversation session and greet the caller
     conversationSvc.createSession(callSid, from);
     const greeting = aiSvc.buildGreeting();
 
     conversationSvc.addTurn(callSid, 'assistant', greeting);
     conversationSvc.advanceStep(callSid, 'collect_name');
 
+    // Respond with TwiML: speak greeting + start listening
     const twiml = twilioSvc.buildGreetingTwiml(callSid, greeting);
     res.type('text/xml').send(twiml);
   } catch (err) {
-    logger.error('Error starting AI session', { callSid, err });
+    logger.error('Error handling incoming call', { callSid, err });
     res.type('text/xml').send(twilioSvc.buildErrorTwiml());
   }
 });
@@ -119,12 +96,17 @@ router.post('/gather', async (req: Request, res: Response) => {
 
   logger.info('Gather received', { callSid, speechResult, noInput });
 
-  const state = conversationSvc.getSession(callSid);
+  let state = conversationSvc.getSession(callSid);
 
+  // Auto-create session if one doesn't exist (e.g. inline TwiML test calls)
   if (!state) {
-    logger.warn('No session found for gather', { callSid });
-    res.type('text/xml').send(twilioSvc.buildErrorTwiml());
-    return;
+    logger.info('No session found — creating one for gather', { callSid });
+    const from = body.From || 'unknown';
+    state = conversationSvc.createSession(callSid, from);
+    const greeting = aiSvc.buildGreeting();
+    conversationSvc.addTurn(callSid, 'assistant', greeting);
+    conversationSvc.advanceStep(callSid, 'collect_name');
+    await callSvc.createInitialCallRecord(callSid, from);
   }
 
   // Handle silence / no input

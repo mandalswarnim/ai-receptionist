@@ -1,89 +1,151 @@
-# AI Receptionist
+# AI Receptionist — Swarnim AI
 
-A production-ready AI phone receptionist that handles missed calls, collects caller information, and emails a structured summary to your team.
+A production-ready AI phone receptionist. When a customer calls your business and nobody answers, the call forwards to this system. The AI picks up, has a full conversation, collects the caller's details, and emails a structured summary to you.
+
+---
 
 ## How It Works
 
 ```
-Incoming Call → Ring Receptionist (15-25s)
-                     │
-          ┌──────────┴──────────┐
-     Answered                Not Answered
-          │                        │
-   Transfer & exit           AI takes over
-                                   │
-                        Greet → Collect Info
-                        → Confirm → Goodbye
-                                   │
-                     Transcribe → Extract Data
-                                   │
-                     Email + Slack + SMS (urgent)
+Customer calls business phone
+         │
+   Business doesn't pick up
+         │
+   Call forwards to Twilio number  ← set up "forward on no answer" on your phone
+         │
+   AI answers immediately
+         │
+   Greets caller → Collects name, company,
+   phone, email, message, urgency
+         │
+   Confirms details → Goodbye → Hangup
+         │
+   ┌─────┴──────────────────────────────┐
+   │         POST-CALL                  │
+   │  OpenAI Whisper transcription      │
+   │  GPT-4o structured data extraction │
+   │  Save to PostgreSQL                │
+   └─────┬──────────────────────────────┘
+         │
+   Email summary → mswarnim1@gmail.com
 ```
-
-## Tech Stack
-
-| Layer       | Technology                          |
-|-------------|-------------------------------------|
-| Telephony   | Twilio (calls, recording, TTS)      |
-| STT         | OpenAI Whisper                      |
-| AI/LLM      | OpenAI GPT-4o                       |
-| Backend     | Node.js + TypeScript + Express      |
-| Database    | PostgreSQL via Prisma               |
-| Email       | SendGrid                            |
-| Alerts      | Slack Webhooks + Twilio SMS         |
 
 ---
 
-## Setup
+## Tech Stack
 
-### 1. Prerequisites
+| Layer      | Technology                     |
+|------------|--------------------------------|
+| Telephony  | Twilio                         |
+| AI Voice   | Twilio Polly Neural TTS        |
+| STT        | OpenAI Whisper                 |
+| LLM        | OpenAI GPT-4o                  |
+| Backend    | Node.js + TypeScript + Express |
+| Database   | PostgreSQL + Prisma ORM        |
+| Email      | Gmail SMTP via Nodemailer      |
+
+---
+
+## Prerequisites
 
 - Node.js 20+
-- PostgreSQL database
-- Twilio account with a phone number
-- OpenAI API key
-- SendGrid account
+- PostgreSQL (installed via Homebrew on Mac)
+- Twilio account (**paid/upgraded** — trial blocks TwiML execution)
+- OpenAI API key with credits
+- Gmail account with an App Password
 
-### 2. Install dependencies
+---
+
+## Setup from Scratch
+
+### 1. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Configure environment
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and fill in all required values.
+Fill in `.env`:
 
-### 4. Set up the database
+```env
+PORT=3000
+NODE_ENV=development
+BASE_URL=https://your-ngrok-url.ngrok-free.app
+
+# Twilio — AI agent number (business forwards missed calls here)
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_PHONE_NUMBER=+44xxxxxxxxxx
+
+# OpenAI
+OPENAI_API_KEY=sk-proj-xxxxxxxx
+OPENAI_MODEL=gpt-4o
+WHISPER_MODEL=whisper-1
+
+# Gmail SMTP
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your@gmail.com
+SMTP_PASS=xxxx xxxx xxxx xxxx    # Gmail App Password (16 chars)
+EMAIL_FROM_NAME=AI Receptionist
+BUSINESS_EMAIL=where-summaries-go@email.com
+
+# Database
+DATABASE_URL=postgresql://yourmacusername@localhost:5432/ai_receptionist
+
+# Company
+COMPANY_NAME=Your Company Name
+COMPANY_TIMEZONE=Europe/London
+```
+
+### 3. Get your Gmail App Password
+
+1. Go to https://myaccount.google.com/security → turn on **2-Step Verification**
+2. Go to https://myaccount.google.com/apppasswords
+3. App name: `AI Receptionist` → Create
+4. Copy the 16-character password into `SMTP_PASS`
+
+### 4. Set up PostgreSQL
 
 ```bash
-npm run db:generate
-npm run db:migrate
+# Install (Mac)
+brew install postgresql@17
+brew services start postgresql@17
+
+# Create database
+createdb ai_receptionist
+
+# Run migrations
+npm run db:migrate:dev
+# When prompted for migration name, type: init
 ```
 
 ### 5. Start the server
 
 ```bash
-# Development (with hot reload)
 npm run dev
-
-# Production
-npm run build && npm start
 ```
 
-### 6. Expose publicly (development)
+You should see:
+```
+AI Receptionist running { port: '3000', company: 'Your Company' }
+Database connected
+SMTP connection verified
+```
 
-Twilio needs a public URL to send webhooks. Use ngrok:
+### 6. Expose publicly with ngrok
 
+Open a new terminal:
 ```bash
 ngrok http 3000
 ```
 
-Copy the `https://xxxxx.ngrok.io` URL into your `.env` as `BASE_URL`.
+Copy the `https://xxxx.ngrok-free.app` URL → paste into `.env` as `BASE_URL` → restart the server.
 
 ### 7. Configure Twilio webhooks
 
@@ -91,153 +153,157 @@ Copy the `https://xxxxx.ngrok.io` URL into your `.env` as `BASE_URL`.
 npx ts-node scripts/setup-twilio.ts
 ```
 
-This sets your Twilio phone number's voice URL to point at your server.
-
----
-
-## API Endpoints
-
-### Twilio Webhooks (called by Twilio)
-
-| Method | Path                              | Description                        |
-|--------|-----------------------------------|------------------------------------|
-| POST   | `/api/webhooks/incoming-call`     | New incoming call                  |
-| POST   | `/api/webhooks/dial-status`       | Receptionist dial result           |
-| POST   | `/api/webhooks/gather`            | Caller speech input                |
-| POST   | `/api/webhooks/recording`         | Call recording ready               |
-| POST   | `/api/webhooks/call-status`       | Final call status                  |
-
-### Admin API
-
-| Method | Path                      | Description                          |
-|--------|---------------------------|--------------------------------------|
-| GET    | `/api/calls`              | List all calls (paginated)           |
-| GET    | `/api/calls?search=james` | Search by name/phone/email/company   |
-| GET    | `/api/calls?urgency=urgent` | Filter by urgency                  |
-| GET    | `/api/calls/:id`          | Get call details + transcript turns  |
-| GET    | `/api/calls/:id/transcript` | Get full transcript               |
-| DELETE | `/api/calls/:id`          | Delete a call record                 |
-| GET    | `/api/calls/stats`        | Summary statistics                   |
-| GET    | `/api/calls/health`       | Health check + active call count     |
-
-### Example responses
-
-**GET /api/calls**
-```json
-{
-  "data": [
-    {
-      "id": "uuid",
-      "callSid": "CA...",
-      "callerName": "James Wilson",
-      "callerCompany": "Apex Solutions",
-      "callerPhone": "0207 123 4567",
-      "urgency": "HIGH",
-      "summary": "James Wilson from Apex Solutions called to discuss a partnership...",
-      "duration": 142,
-      "emailSent": true,
-      "startedAt": "2026-04-04T10:32:00.000Z"
-    }
-  ],
-  "pagination": { "page": 1, "limit": 20, "total": 47, "pages": 3 }
-}
+Output:
+```
+Twilio webhooks configured:
+  Voice URL:       https://xxxx.ngrok-free.app/api/webhooks/incoming-call
+  Status Callback: https://xxxx.ngrok-free.app/api/webhooks/call-status
 ```
 
-**GET /api/calls/stats**
-```json
-{
-  "total": 47,
-  "byStatus": { "COMPLETED": 44, "FAILED": 2, "IN_PROGRESS": 1 },
-  "byUrgency": { "LOW": 12, "MEDIUM": 22, "HIGH": 8, "URGENT": 3 },
-  "avgDurationSeconds": 98,
-  "activeCalls": 0
-}
-```
+### 8. Set up call forwarding on your business phone
+
+In your phone settings or provider portal, enable:
+> **"Forward on no answer" → your Twilio number**
 
 ---
 
 ## Testing
 
-### Simulate a full call (no Twilio required)
+### Test the AI conversation locally (no phone needed)
 
 ```bash
 npx ts-node scripts/test-flow.ts
 ```
 
-This runs a simulated conversation through the AI and prints the transcript, extracted data, and email content.
+Simulates a full call conversation, prints the transcript and extracted JSON, no Twilio required.
 
-### Test with a real call
+### Test with a real call (outbound)
 
-1. Start your server with ngrok running
-2. Call your Twilio number
-3. Let it ring (don't answer) until the AI picks up
-4. Speak naturally — give your name, reason for calling, etc.
-5. Check your email and the `/api/calls` endpoint
+```bash
+npx ts-node scripts/test-call.ts +44xxxxxxxxxx
+```
+
+Twilio calls your phone. Answer it and talk to the AI.
+
+> **Note:** Requires a paid/upgraded Twilio account. Trial accounts play a disclaimer and hang up before TwiML executes.
+
+### Test with an inbound call
+
+Once call forwarding is set up on your business phone, call your business number and don't answer. The call forwards to Twilio and the AI picks up.
+
+---
+
+## API Endpoints
+
+### Admin
+
+| Method | Path                        | Description                        |
+|--------|-----------------------------|------------------------------------|
+| GET    | `/api/calls/health`         | Health check + active call count   |
+| GET    | `/api/calls/stats`          | Summary statistics                 |
+| GET    | `/api/calls`                | List all calls (paginated)         |
+| GET    | `/api/calls?search=james`   | Search by name/phone/email/company |
+| GET    | `/api/calls?urgency=urgent` | Filter by urgency                  |
+| GET    | `/api/calls/:id`            | Full call + conversation turns     |
+| GET    | `/api/calls/:id/transcript` | Full transcript                    |
+| DELETE | `/api/calls/:id`            | Delete a call record               |
+
+### Twilio Webhooks (called by Twilio automatically)
+
+| Method | Path                              | Description              |
+|--------|-----------------------------------|--------------------------|
+| POST   | `/api/webhooks/incoming-call`     | Forwarded call arrives   |
+| POST   | `/api/webhooks/gather`            | Caller speaks            |
+| POST   | `/api/webhooks/recording`         | Recording ready          |
+| POST   | `/api/webhooks/call-status`       | Call ends                |
+
+---
+
+## Example Email Output
+
+**Subject:** `New Missed Call Message from James Wilson`
+
+The email includes:
+- Caller name, company, phone, email
+- Urgency badge (🔴 URGENT / 🟠 High / 🟡 Medium / 🟢 Low)
+- Full message
+- AI-generated summary
+- Timestamp
 
 ---
 
 ## Environment Variables
 
-| Variable                  | Required | Description                                      |
-|---------------------------|----------|--------------------------------------------------|
-| `PORT`                    | No       | Server port (default: 3000)                      |
-| `NODE_ENV`                | No       | `development` or `production`                    |
-| `BASE_URL`                | Yes      | Public HTTPS URL for Twilio webhooks             |
-| `TWILIO_ACCOUNT_SID`      | Yes      | Twilio Account SID (starts with AC)              |
-| `TWILIO_AUTH_TOKEN`       | Yes      | Twilio Auth Token                                |
-| `TWILIO_PHONE_NUMBER`     | Yes      | Your Twilio number in E.164 format               |
-| `RECEPTIONIST_PHONE_NUMBER` | Yes    | Human receptionist's number                      |
-| `DIAL_TIMEOUT_SECONDS`    | No       | Seconds to ring before AI takes over (default 20)|
-| `OPENAI_API_KEY`          | Yes      | OpenAI API key                                   |
-| `OPENAI_MODEL`            | No       | GPT model (default: gpt-4o)                      |
-| `WHISPER_MODEL`           | No       | Whisper model (default: whisper-1)               |
-| `SENDGRID_API_KEY`        | Yes      | SendGrid API key                                 |
-| `EMAIL_FROM`              | Yes      | Sender email address                             |
-| `RECEPTIONIST_EMAIL`      | Yes      | Where to send call summaries                     |
-| `DATABASE_URL`            | Yes      | PostgreSQL connection URL                        |
-| `COMPANY_NAME`            | No       | Your company name (used in AI greeting)          |
-| `COMPANY_TIMEZONE`        | No       | Timezone for timestamps (default: UTC)           |
-| `SLACK_WEBHOOK_URL`       | No       | Slack incoming webhook URL                       |
-| `ALERT_SMS_NUMBER`        | No       | Number to SMS for urgent calls                   |
+| Variable           | Required | Description                                  |
+|--------------------|----------|----------------------------------------------|
+| `BASE_URL`         | Yes      | Public HTTPS URL (ngrok in dev)              |
+| `TWILIO_ACCOUNT_SID` | Yes    | Starts with `AC`                             |
+| `TWILIO_AUTH_TOKEN`  | Yes    | Twilio auth token                            |
+| `TWILIO_PHONE_NUMBER`| Yes    | Your Twilio number in `+E.164` format        |
+| `OPENAI_API_KEY`   | Yes      | Must have billing credits                    |
+| `OPENAI_MODEL`     | No       | Default: `gpt-4o`                            |
+| `WHISPER_MODEL`    | No       | Default: `whisper-1`                         |
+| `SMTP_HOST`        | No       | Default: `smtp.gmail.com`                    |
+| `SMTP_PORT`        | No       | Default: `587`                               |
+| `SMTP_USER`        | Yes      | Your Gmail address                           |
+| `SMTP_PASS`        | Yes      | Gmail App Password (16 chars, no spaces)     |
+| `EMAIL_FROM_NAME`  | No       | Default: `AI Receptionist`                   |
+| `BUSINESS_EMAIL`   | Yes      | Where call summaries are sent                |
+| `DATABASE_URL`     | Yes      | PostgreSQL connection string                 |
+| `COMPANY_NAME`     | No       | Default: `The Company`                       |
+| `COMPANY_TIMEZONE` | No       | Default: `UTC`                               |
+| `SLACK_WEBHOOK_URL`| No       | Slack notifications (optional)               |
+| `ALERT_SMS_NUMBER` | No       | SMS alert for urgent calls (optional)        |
 
 ---
 
 ## Production Deployment
 
-### Docker (recommended)
+### Build
 
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY dist ./dist
-COPY prisma ./prisma
-RUN npx prisma generate
-EXPOSE 3000
-CMD ["node", "dist/index.js"]
-```
-
-Build:
 ```bash
 npm run build
-docker build -t ai-receptionist .
+npm start
 ```
 
-### Environment checklist
+### Checklist
 
 - [ ] `NODE_ENV=production`
-- [ ] `BASE_URL` is your real HTTPS domain (not ngrok)
-- [ ] Twilio webhooks updated to production URL
-- [ ] Database migrations run: `npm run db:migrate`
-- [ ] Logs directory exists and is writable
-- [ ] SendGrid sender verified
+- [ ] `BASE_URL` is a real HTTPS domain (not ngrok)
+- [ ] Twilio account is upgraded (not trial)
+- [ ] OpenAI API has billing credits
+- [ ] Run `npm run db:migrate` after deploy
+- [ ] Twilio webhooks updated to production URL via `npx ts-node scripts/setup-twilio.ts`
 
 ---
 
-## Architecture Notes
+## Folder Structure
 
-- **Conversation state** is held in-memory (a `Map` keyed by `callSid`). For multi-instance deployments, replace with Redis.
-- **Recording transcription** uses OpenAI Whisper on the MP3 from Twilio. If the recording isn't ready yet, the system falls back to the turn-by-turn conversation log.
-- **Post-call processing** runs asynchronously (`setImmediate`) so it never blocks the TwiML response back to Twilio.
-- **Twilio signature validation** is enforced in production. In development it's skipped (safe since ngrok URLs are ephemeral).
+```
+src/
+├── index.ts                      # Express app + startup
+├── config/index.ts               # Zod-validated env config
+├── types/index.ts                # TypeScript types
+├── lib/
+│   ├── db.ts                     # Prisma singleton
+│   └── logger.ts                 # Winston logger
+├── services/
+│   ├── conversation.service.ts   # In-memory call session state
+│   ├── ai.service.ts             # GPT-4o conversation + extraction
+│   ├── twilio.service.ts         # TwiML builders
+│   ├── transcription.service.ts  # Whisper STT
+│   ├── call.service.ts           # Post-call orchestration
+│   ├── email.service.ts          # Gmail SMTP emails
+│   └── slack.service.ts          # Slack alerts (optional)
+└── api/
+    ├── middleware/index.ts
+    └── routes/
+        ├── webhooks.ts            # Twilio webhook handlers
+        └── calls.ts               # Admin REST API
+prisma/
+└── schema.prisma                  # Call + ConversationTurn models
+scripts/
+├── setup-twilio.ts                # Wire Twilio webhooks automatically
+├── test-call.ts                   # Make a real outbound test call
+└── test-flow.ts                   # Simulate a call locally (no Twilio)
+```

@@ -12,25 +12,8 @@ export const twilioClient = twilio(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH
 // ─── TwiML builders ──────────────────────────────────────────────────────────
 
 /**
- * Initial TwiML: rings the human receptionist first.
- * If unanswered, routes to AI via the dial-status callback.
- */
-export function buildIncomingCallTwiml(): string {
-  const twiml = new VoiceResponse();
-
-  const dial = twiml.dial({
-    timeout: parseInt(config.DIAL_TIMEOUT_SECONDS),
-    action: `${config.BASE_URL}/api/webhooks/dial-status`,
-    method: 'POST',
-  });
-
-  dial.number(config.RECEPTIONIST_PHONE_NUMBER);
-
-  return twiml.toString();
-}
-
-/**
  * Greeting TwiML: the AI says hello and immediately listens for a response.
+ * This is the first thing callers hear when the AI picks up.
  */
 export function buildGreetingTwiml(callSid: string, greeting: string): string {
   const twiml = new VoiceResponse();
