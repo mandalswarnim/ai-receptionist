@@ -4,7 +4,20 @@
       "Bash(npm install:*)",
       "Bash(npx prisma:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(gh repo:*)",
+      "Bash(psql --version)",
+      "Bash(pg_isready)",
+      "Bash(brew install:*)",
+      "Bash(brew services:*)",
+      "Bash(export PATH=\"/opt/homebrew/opt/postgresql@17/bin:$PATH\")",
+      "Bash(createdb ai_receptionist)",
+      "Bash(curl -s http://localhost:3000/api/calls/health)",
+      "Bash(npx ts-node:*)",
+      "Bash(curl:*)",
+      "Bash(node -e ':*)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-turbopack --use-npm)",
+      "Bash(git add *)"
     ]
   }
 }
