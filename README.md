@@ -13,36 +13,54 @@ Customer calls business phone
          │
    Call forwards to Twilio number  ← set up "forward on no answer" on your phone
          │
-   AI answers immediately
+   AI answers immediately ("Maya")
          │
    Greets caller → Collects name, company,
    phone, email, message, urgency
+   (caller can interrupt the AI mid-sentence)
          │
    Confirms details → Goodbye → Hangup
          │
-   ┌─────┴──────────────────────────────┐
-   │         POST-CALL                  │
-   │  OpenAI Whisper transcription      │
-   │  GPT-4o structured data extraction │
-   │  Save to PostgreSQL                │
-   └─────┬──────────────────────────────┘
-         │
-   Email summary → mswarnim1@gmail.com
+   ┌─────┴──────────────────────────────────┐
+   │         POST-CALL                      │
+   │  GPT-4o structured data extraction     │
+   │  Save to PostgreSQL → Email summary    │
+   │  Recording → gpt-4o-transcribe →       │
+   │  accurate transcript backfilled        │
+   └────────────────────────────────────────┘
 ```
+
+---
+
+## Conversation Modes
+
+The receptionist has two interchangeable voice pipelines, switched with one
+env var (`USE_CONVERSATION_RELAY`):
+
+| | **ConversationRelay** (default) | **Gather webhooks** (fallback) |
+|---|---|---|
+| Voice | ElevenLabs "Amelia" (British female, genuinely human) | Amazon Polly Generative (`Polly.Amy-Generative`) |
+| Live transcription | Deepgram Nova (streaming) | Deepgram Nova-2 via Twilio Gather |
+| Caller can interrupt | ✅ native barge-in | ✅ within each Gather |
+| Latency | Lowest (token streaming straight to TTS) | Moderate (turn-based) |
+| Transport | WebSocket (`/api/relay`) | HTTP webhooks |
+
+Both modes share the same persona, post-call pipeline, database, and email.
 
 ---
 
 ## Tech Stack
 
-| Layer      | Technology                     |
-|------------|--------------------------------|
-| Telephony  | Twilio                         |
-| AI Voice   | Twilio Polly Neural TTS        |
-| STT        | OpenAI Whisper                 |
-| LLM        | OpenAI GPT-4o                  |
-| Backend    | Node.js + TypeScript + Express |
-| Database   | PostgreSQL + Prisma ORM        |
-| Email      | Gmail SMTP via Nodemailer      |
+| Layer      | Technology                                            |
+|------------|-------------------------------------------------------|
+| Telephony  | Twilio (ConversationRelay or Gather/Say)              |
+| AI Voice   | ElevenLabs (relay) / Amazon Polly Generative (webhook)|
+| Live STT   | Deepgram Nova                                         |
+| Post-call STT | OpenAI gpt-4o-transcribe (on the call recording)   |
+| LLM        | OpenAI GPT-4o (streaming in relay mode)               |
+| Backend    | Node.js + TypeScript + Express + ws                   |
+| Database   | PostgreSQL + Prisma ORM                               |
+| Email      | Gmail SMTP via Nodemailer                             |
 
 ---
 
@@ -85,7 +103,12 @@ TWILIO_PHONE_NUMBER=+44xxxxxxxxxx
 # OpenAI
 OPENAI_API_KEY=sk-proj-xxxxxxxx
 OPENAI_MODEL=gpt-4o
-WHISPER_MODEL=whisper-1
+WHISPER_MODEL=gpt-4o-transcribe
+
+# Persona & voice (see .env.example for all options)
+PERSONA_NAME=Maya
+USE_CONVERSATION_RELAY=true
+RECORD_CALLS=true
 
 # Gmail SMTP
 SMTP_HOST=smtp.gmail.com
@@ -241,8 +264,18 @@ The email includes:
 | `TWILIO_AUTH_TOKEN`  | Yes    | Twilio auth token                            |
 | `TWILIO_PHONE_NUMBER`| Yes    | Your Twilio number in `+E.164` format        |
 | `OPENAI_API_KEY`   | Yes      | Must have billing credits                    |
-| `OPENAI_MODEL`     | No       | Default: `gpt-4o`                            |
-| `WHISPER_MODEL`    | No       | Default: `whisper-1`                         |
+| `OPENAI_MODEL`     | No       | Default: `gpt-4o` (`gpt-4o-mini` is faster/cheaper) |
+| `WHISPER_MODEL`    | No       | Post-call STT. Default: `gpt-4o-transcribe`  |
+| `PERSONA_NAME`     | No       | Receptionist's name. Default: `Maya`         |
+| `USE_CONVERSATION_RELAY` | No | `true` (default) = streaming ElevenLabs voice; `false` = Polly webhooks |
+| `RELAY_VOICE`      | No       | ElevenLabs voice ID. Default: Amelia (British female) |
+| `RELAY_SPEECH_MODEL` | No     | Deepgram model for relay STT. Default: `nova-2-general` |
+| `TTS_VOICE`        | No       | Webhook-mode voice. Default: `Polly.Amy-Generative` |
+| `TTS_LANGUAGE`     | No       | Default: `en-GB`                             |
+| `SPEECH_MODEL`     | No       | Webhook-mode live STT. Default: `deepgram_nova-2` |
+| `SPEECH_TIMEOUT`   | No       | Silence (s) ending an utterance. Default: `2` |
+| `SPEECH_HINTS`     | No       | Extra comma-separated vocabulary hints        |
+| `RECORD_CALLS`     | No       | Default: `true`. Greeting discloses recording; check consent rules for your jurisdiction |
 | `SMTP_HOST`        | No       | Default: `smtp.gmail.com`                    |
 | `SMTP_PORT`        | No       | Default: `587`                               |
 | `SMTP_USER`        | Yes      | Your Gmail address                           |
@@ -289,10 +322,11 @@ src/
 │   └── logger.ts                 # Winston logger
 ├── services/
 │   ├── conversation.service.ts   # In-memory call session state
-│   ├── ai.service.ts             # GPT-4o conversation + extraction
-│   ├── twilio.service.ts         # TwiML builders
-│   ├── transcription.service.ts  # Whisper STT
-│   ├── call.service.ts           # Post-call orchestration
+│   ├── ai.service.ts             # GPT-4o conversation (JSON + streaming) + extraction
+│   ├── twilio.service.ts         # TwiML builders (Gather + ConversationRelay), recording
+│   ├── relay.service.ts          # ConversationRelay WebSocket session handling
+│   ├── transcription.service.ts  # Post-call audio transcription (gpt-4o-transcribe)
+│   ├── call.service.ts           # Post-call orchestration + recording enhancement
 │   ├── email.service.ts          # Gmail SMTP emails
 │   └── slack.service.ts          # Slack alerts (optional)
 └── api/

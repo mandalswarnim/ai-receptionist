@@ -4,41 +4,68 @@
 
 import twilio from 'twilio';
 import VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
-import { config } from '../config';
+import { config, wsBaseUrl } from '../config';
 import { logger } from '../lib/logger';
 
 export const twilioClient = twilio(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN);
 
-// ─── TwiML builders ──────────────────────────────────────────────────────────
+// ─── Shared TTS / STT settings ───────────────────────────────────────────────
+
+const SAY_ATTRS = {
+  voice: config.TTS_VOICE as never,
+  language: config.TTS_LANGUAGE as never,
+};
+
+/** Vocabulary hints improve live speech recognition of expected words. */
+function speechHints(): string {
+  const base = [
+    config.COMPANY_NAME,
+    config.PERSONA_NAME,
+    'yes',
+    'no',
+    'urgent',
+    'email',
+    'phone number',
+    'message',
+    'at gmail dot com',
+    'at outlook dot com',
+  ];
+  if (config.SPEECH_HINTS) base.push(...config.SPEECH_HINTS.split(','));
+  return base
+    .map((h) => h.trim())
+    .filter(Boolean)
+    .join(',');
+}
+
+function addGather(twiml: VoiceResponse, callSid: string, message: string): void {
+  const gather = twiml.gather({
+    input: ['speech'],
+    speechTimeout: config.SPEECH_TIMEOUT,
+    speechModel: config.SPEECH_MODEL,
+    language: config.TTS_LANGUAGE as never,
+    hints: speechHints(),
+    profanityFilter: false,
+    action: `${config.BASE_URL}/api/webhooks/gather?callSid=${callSid}`,
+    method: 'POST',
+    timeout: 6,
+    // Always POST to the action, even on silence — no <Redirect> dance needed
+    actionOnEmptyResult: true,
+  });
+
+  // Speaking inside <Gather> means the caller can barge in mid-sentence and
+  // nothing they say while the AI is talking gets lost.
+  gather.say(SAY_ATTRS, message);
+}
+
+// ─── TwiML builders (webhook/Gather mode) ────────────────────────────────────
 
 /**
- * Greeting TwiML: the AI says hello and immediately listens for a response.
- * This is the first thing callers hear when the AI picks up.
+ * Greeting TwiML: the AI says hello while already listening, so callers can
+ * interrupt and speech during the greeting is captured.
  */
 export function buildGreetingTwiml(callSid: string, greeting: string): string {
   const twiml = new VoiceResponse();
-
-  twiml.say({ voice: 'Polly.Joanna-Neural', language: 'en-US' }, greeting);
-
-  const gather = twiml.gather({
-    input: ['speech'],
-    speechTimeout: 'auto',
-    speechModel: 'phone_call',
-    language: 'en-US',
-    action: `${config.BASE_URL}/api/webhooks/gather?callSid=${callSid}`,
-    method: 'POST',
-    timeout: 10,
-  });
-
-  // Fallback prompt if caller says nothing
-  gather.say(
-    { voice: 'Polly.Joanna-Neural', language: 'en-US' },
-    "I didn't catch that. Could you please speak your response?"
-  );
-
-  // If gather times out, loop back
-  twiml.redirect(`${config.BASE_URL}/api/webhooks/gather?callSid=${callSid}&noInput=true`);
-
+  addGather(twiml, callSid, greeting);
   return twiml.toString();
 }
 
@@ -47,36 +74,16 @@ export function buildGreetingTwiml(callSid: string, greeting: string): string {
  */
 export function buildGatherTwiml(callSid: string, message: string): string {
   const twiml = new VoiceResponse();
-
-  const gather = twiml.gather({
-    input: ['speech'],
-    speechTimeout: 'auto',
-    speechModel: 'phone_call',
-    language: 'en-US',
-    action: `${config.BASE_URL}/api/webhooks/gather?callSid=${callSid}`,
-    method: 'POST',
-    timeout: 10,
-  });
-
-  gather.say({ voice: 'Polly.Joanna-Neural', language: 'en-US' }, message);
-
-  // Timeout fallback
-  twiml.say(
-    { voice: 'Polly.Joanna-Neural', language: 'en-US' },
-    "I'm still here. Take your time."
-  );
-  twiml.redirect(`${config.BASE_URL}/api/webhooks/gather?callSid=${callSid}&noInput=true`);
-
+  addGather(twiml, callSid, message);
   return twiml.toString();
 }
 
 /**
  * Closing TwiML: AI speaks a goodbye message and hangs up.
- * Triggers call recording completion.
  */
 export function buildClosingTwiml(message: string): string {
   const twiml = new VoiceResponse();
-  twiml.say({ voice: 'Polly.Joanna-Neural', language: 'en-US' }, message);
+  twiml.say(SAY_ATTRS, message);
   twiml.hangup();
   return twiml.toString();
 }
@@ -87,14 +94,65 @@ export function buildClosingTwiml(message: string): string {
 export function buildErrorTwiml(): string {
   const twiml = new VoiceResponse();
   twiml.say(
-    { voice: 'Polly.Joanna-Neural', language: 'en-US' },
-    "I'm sorry, I'm experiencing a technical difficulty. Please try calling again, and someone will assist you. Goodbye."
+    SAY_ATTRS,
+    "I'm really sorry, something's gone wrong on my end. Please call back in a moment and I'll be right here. Goodbye."
   );
   twiml.hangup();
   return twiml.toString();
 }
 
+// ─── TwiML builder (ConversationRelay mode) ──────────────────────────────────
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * ConversationRelay TwiML: Twilio streams caller speech to our WebSocket as
+ * text and speaks whatever text we send back (ElevenLabs TTS + Deepgram STT),
+ * with barge-in handled natively. Built as raw XML so it works regardless of
+ * the installed twilio SDK version.
+ */
+export function buildRelayTwiml(greeting: string): string {
+  const attrs = [
+    `url="${escapeXml(`${wsBaseUrl}/api/relay`)}"`,
+    `welcomeGreeting="${escapeXml(greeting)}"`,
+    `ttsProvider="${escapeXml(config.RELAY_TTS_PROVIDER)}"`,
+    `voice="${escapeXml(config.RELAY_VOICE)}"`,
+    `transcriptionProvider="${escapeXml(config.RELAY_TRANSCRIPTION_PROVIDER)}"`,
+    `speechModel="${escapeXml(config.RELAY_SPEECH_MODEL)}"`,
+    `transcriptionLanguage="${escapeXml(config.TTS_LANGUAGE)}"`,
+    `interruptible="speech"`,
+  ].join(' ');
+
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><ConversationRelay ${attrs}/></Connect></Response>`;
+}
+
 // ─── Recording helpers ───────────────────────────────────────────────────────
+
+/**
+ * Starts a full-call recording via the REST API (TwiML alone can't record a
+ * live conversational call). Fire-and-forget: a failed recording should never
+ * break the call itself.
+ */
+export async function startCallRecording(callSid: string): Promise<void> {
+  if (!config.RECORD_CALLS) return;
+  try {
+    await twilioClient.calls(callSid).recordings.create({
+      recordingChannels: 'dual',
+      recordingStatusCallback: `${config.BASE_URL}/api/webhooks/recording`,
+      recordingStatusCallbackEvent: ['completed'],
+    });
+    logger.info('Call recording started', { callSid });
+  } catch (err) {
+    logger.error('Failed to start call recording', { callSid, err });
+  }
+}
 
 /**
  * Fetches a recording as a Buffer for transcription.
@@ -115,6 +173,19 @@ export async function fetchRecordingBuffer(recordingUrl: string): Promise<Buffer
 
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+/**
+ * Ends a live call gracefully via the REST API (used by relay mode after the
+ * goodbye has been spoken).
+ */
+export async function endCall(callSid: string): Promise<void> {
+  try {
+    await twilioClient.calls(callSid).update({ status: 'completed' });
+    logger.info('Call ended via REST API', { callSid });
+  } catch (err) {
+    logger.error('Failed to end call', { callSid, err });
+  }
 }
 
 /**

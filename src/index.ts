@@ -1,13 +1,16 @@
 import express from 'express';
+import http from 'http';
 import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
+import { WebSocketServer } from 'ws';
 import { config, isDev } from './config';
 import { logger } from './lib/logger';
 import { connectDb, disconnectDb } from './lib/db';
 import webhookRoutes from './api/routes/webhooks';
 import callRoutes from './api/routes/calls';
 import { notFound, errorHandler } from './api/middleware';
+import { handleRelayConnection } from './services/relay.service';
 
 const app = express();
 
@@ -56,12 +59,22 @@ app.use(errorHandler);
 async function start() {
   await connectDb();
 
-  const server = app.listen(config.PORT, () => {
+  const server = http.createServer(app);
+
+  // ConversationRelay streams caller speech to this WebSocket (see relay.service.ts)
+  const wss = new WebSocketServer({ server, path: '/api/relay' });
+  wss.on('connection', handleRelayConnection);
+
+  server.listen(config.PORT, () => {
     logger.info(`AI Receptionist running`, {
       port: config.PORT,
       env: config.NODE_ENV,
       company: config.COMPANY_NAME,
       twilioNumber: config.TWILIO_PHONE_NUMBER,
+      mode: config.USE_CONVERSATION_RELAY ? 'conversation-relay' : 'gather-webhook',
+      voice: config.USE_CONVERSATION_RELAY
+        ? `${config.RELAY_TTS_PROVIDER}/${config.RELAY_VOICE}`
+        : config.TTS_VOICE,
     });
   });
 

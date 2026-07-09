@@ -5,8 +5,13 @@
  *   Customer calls business → Business doesn't answer → Call forwarded to
  *   our Twilio number → AI picks up immediately → Collects info → Emails business.
  *
+ * Two conversation modes (USE_CONVERSATION_RELAY):
+ *   true  — Twilio ConversationRelay streams speech over a WebSocket
+ *           (see relay.service.ts); only recording/status webhooks fire here.
+ *   false — classic <Gather>/<Say> webhook loop handled below.
+ *
  * POST /api/webhooks/incoming-call   — Twilio calls this when a forwarded call arrives
- * POST /api/webhooks/gather          — Fires each time the caller speaks
+ * POST /api/webhooks/gather          — Fires each time the caller speaks (webhook mode)
  * POST /api/webhooks/recording       — Fires when call recording is ready
  * POST /api/webhooks/call-status     — Fires on final call status change
  */
@@ -67,26 +72,31 @@ router.post('/incoming-call', async (req: Request, res: Response) => {
   logger.info('Forwarded call received — AI answering', { callSid, from });
 
   try {
-    // Save initial record to DB
-    await callSvc.createInitialCallRecord(callSid, from);
-
-    // Start a conversation session and greet the caller
-    conversationSvc.createSession(callSid, from);
     const greeting = aiSvc.buildGreeting();
 
+    if (config.USE_CONVERSATION_RELAY) {
+      // Session setup happens when the WebSocket connects (relay.service.ts)
+      res.type('text/xml').send(twilioSvc.buildRelayTwiml(greeting));
+      return;
+    }
+
+    // Webhook mode: save record, start session, greet and listen
+    await callSvc.createInitialCallRecord(callSid, from);
+
+    conversationSvc.createSession(callSid, from);
     conversationSvc.addTurn(callSid, 'assistant', greeting);
     conversationSvc.advanceStep(callSid, 'collect_name');
 
-    // Respond with TwiML: speak greeting + start listening
-    const twiml = twilioSvc.buildGreetingTwiml(callSid, greeting);
-    res.type('text/xml').send(twiml);
+    void twilioSvc.startCallRecording(callSid);
+
+    res.type('text/xml').send(twilioSvc.buildGreetingTwiml(callSid, greeting));
   } catch (err) {
     logger.error('Error handling incoming call', { callSid, err });
     res.type('text/xml').send(twilioSvc.buildErrorTwiml());
   }
 });
 
-// ─── 3. Gather (Speech Input) ────────────────────────────────────────────────
+// ─── 2. Gather (Speech Input — webhook mode only) ────────────────────────────
 
 router.post('/gather', async (req: Request, res: Response) => {
   const body = req.body as TwilioGatherPayload;
@@ -107,14 +117,15 @@ router.post('/gather', async (req: Request, res: Response) => {
     conversationSvc.addTurn(callSid, 'assistant', greeting);
     conversationSvc.advanceStep(callSid, 'collect_name');
     await callSvc.createInitialCallRecord(callSid, from);
+    void twilioSvc.startCallRecording(callSid);
   }
 
   // Handle silence / no input
   if (noInput || !speechResult) {
     const prompt =
       state.turnCount < 2
-        ? "I'm sorry, I didn't hear you. Could you please speak your response?"
-        : "I'm still here — please go ahead and speak when you're ready.";
+        ? "Sorry, I didn't catch that — could you say it again for me?"
+        : "No rush — I'm still here whenever you're ready.";
 
     res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, prompt));
     return;
@@ -125,7 +136,12 @@ router.post('/gather', async (req: Request, res: Response) => {
 
   try {
     // Generate AI response
-    const { response, nextStep } = await aiSvc.generateResponse(state, speechResult);
+    const { response, nextStep, extracted } = await aiSvc.generateResponse(state);
+
+    // Track what the AI has collected so far so it never re-asks
+    if (Object.keys(extracted).length > 0) {
+      conversationSvc.updateCollectedInfo(callSid, extracted);
+    }
 
     // Update step
     conversationSvc.advanceStep(callSid, nextStep);
@@ -156,12 +172,17 @@ router.post('/gather', async (req: Request, res: Response) => {
     logger.error('Error in gather handler', { callSid, err });
     res.type('text/xml').send(twilioSvc.buildGatherTwiml(
       callSid,
-      "I'm sorry, I had a technical issue. Could you please repeat what you said?"
+      "Sorry, I lost you for a second there. Could you say that again?"
     ));
   }
 });
 
-// ─── 4. Recording Callback ───────────────────────────────────────────────────
+// ─── 3. Recording Callback ───────────────────────────────────────────────────
+//
+// Fires shortly after the call ends. The summary email has usually already
+// gone out (built from the live conversation), so this upgrades the stored
+// transcript with an accurate audio transcription and backfills any details
+// the live conversation missed.
 
 router.post('/recording', async (req: Request, res: Response) => {
   const body = req.body as TwilioRecordingPayload;
@@ -172,29 +193,14 @@ router.post('/recording', async (req: Request, res: Response) => {
   // Acknowledge immediately
   res.sendStatus(204);
 
-  // Re-process the call with the actual recording URL if we have a state for it,
-  // or update the DB record if processing already happened.
   const duration = parseInt(RecordingDuration ?? '0', 10);
 
-  try {
-    const existingCall = await import('../../lib/db').then(({ db }) =>
-      db.call.findUnique({ where: { callSid } })
-    );
-
-    if (existingCall && !existingCall.recordingUrl) {
-      const { db } = await import('../../lib/db');
-      await db.call.update({
-        where: { callSid },
-        data: { recordingUrl, recordingSid, duration },
-      });
-      logger.info('Recording URL saved to existing call record', { callSid });
-    }
-  } catch (err) {
-    logger.error('Error saving recording URL', { callSid, err });
-  }
+  callSvc
+    .enhanceCallWithRecording(callSid, recordingUrl, recordingSid, duration)
+    .catch((err) => logger.error('Error processing recording', { callSid, err }));
 });
 
-// ─── 5. Call Status Callback ─────────────────────────────────────────────────
+// ─── 4. Call Status Callback ─────────────────────────────────────────────────
 
 router.post('/call-status', async (req: Request, res: Response) => {
   const body = req.body as TwilioCallPayload & { CallDuration?: string };
@@ -204,13 +210,15 @@ router.post('/call-status', async (req: Request, res: Response) => {
 
   res.sendStatus(204);
 
-  // Handle calls that ended unexpectedly (e.g., caller hung up mid-conversation)
+  // Handle calls that ended unexpectedly (e.g., caller hung up mid-conversation).
+  // destroySession() is the mutex: whichever handler destroys the session first
+  // (this one, gather's closing branch, or the relay socket close) processes it.
   const session = conversationSvc.getSession(callSid);
   if (session && (callStatus === 'completed' || callStatus === 'failed')) {
     logger.info('Call ended with active session — processing', { callSid, callStatus });
     const finalState = conversationSvc.destroySession(callSid);
 
-    if (finalState && finalState.turns.length > 0) {
+    if (finalState && finalState.turns.some((t) => t.role === 'caller')) {
       setImmediate(() => {
         callSvc
           .processCompletedCall(
@@ -221,6 +229,11 @@ router.post('/call-status', async (req: Request, res: Response) => {
           )
           .catch((err) => logger.error('Post-call processing failed', { callSid, err }));
       });
+    } else if (finalState) {
+      // Caller never said anything — close the record without emailing
+      callSvc
+        .markCallCompleted(callSid)
+        .catch((err) => logger.error('Failed to close call record', { callSid, err }));
     }
   }
 });

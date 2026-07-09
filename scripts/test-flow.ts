@@ -45,13 +45,16 @@ async function simulateConversation(): Promise<void> {
 
     console.log('[Caller]:', input);
 
-    const { response, nextStep } = await aiSvc.generateResponse(currentState, input);
     conversationSvc.addTurn(FAKE_CALL_SID, 'caller', input);
+    const { response, nextStep, extracted } = await aiSvc.generateResponse(currentState);
+    if (Object.keys(extracted).length > 0) {
+      conversationSvc.updateCollectedInfo(FAKE_CALL_SID, extracted);
+    }
     conversationSvc.advanceStep(FAKE_CALL_SID, nextStep);
     conversationSvc.addTurn(FAKE_CALL_SID, 'assistant', response);
 
     console.log('[AI]:', response);
-    console.log('  → Step:', nextStep, '\n');
+    console.log('  → Step:', nextStep, '| Collected:', JSON.stringify(extracted), '\n');
 
     if (nextStep === 'closing') break;
 

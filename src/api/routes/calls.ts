@@ -39,8 +39,8 @@ router.get('/stats', async (_req: Request, res: Response) => {
 
     res.json({
       total,
-      byStatus: Object.fromEntries(byStatus.map((r) => [r.status, r._count])),
-      byUrgency: Object.fromEntries(byUrgency.map((r) => [r.urgency!, r._count])),
+      byStatus: Object.fromEntries(byStatus.map((r: { status: string; _count: number }) => [r.status, r._count])),
+      byUrgency: Object.fromEntries(byUrgency.map((r: { urgency: string | null; _count: number }) => [r.urgency ?? 'UNKNOWN', r._count])),
       avgDurationSeconds: Math.round(avgDuration._avg.duration ?? 0),
       activeCalls: getActiveSessionCount(),
     });

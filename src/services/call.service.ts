@@ -23,15 +23,15 @@ export async function processCompletedCall(
   logger.info('Processing completed call', { callSid, hasRecording: !!recordingUrl });
 
   try {
-    // 1. Build transcript (from recording if available, else from conversation turns)
+    // 1. Build transcript (from recording if already available, else from
+    //    conversation turns — the recording webhook upgrades it later)
     let transcript: string;
     if (recordingUrl && state.turns.length > 0) {
       try {
-        const whisperTranscript = await transcribeRecording(recordingUrl);
-        // Prefer Whisper but fall back to turn-based if too short
+        const audioTranscript = await transcribeRecording(recordingUrl);
         transcript =
-          whisperTranscript.length > 50
-            ? whisperTranscript
+          audioTranscript.length > 50
+            ? audioTranscript
             : buildTurnsTranscript(state.turns);
       } catch {
         transcript = buildTurnsTranscript(state.turns);
@@ -162,4 +162,66 @@ export async function createInitialCallRecord(
     },
     update: { status: 'IN_PROGRESS' },
   });
+}
+
+/** Closes out a call record that ended before the caller said anything. */
+export async function markCallCompleted(callSid: string): Promise<void> {
+  await db.call.updateMany({
+    where: { callSid },
+    data: { status: 'COMPLETED', endedAt: new Date() },
+  });
+}
+
+/**
+ * Called when the call recording becomes available (usually seconds after the
+ * call ends and the summary email has already gone out). Replaces the
+ * live-STT transcript with an accurate audio transcription, and backfills any
+ * caller details the live conversation missed.
+ */
+export async function enhanceCallWithRecording(
+  callSid: string,
+  recordingUrl: string,
+  recordingSid: string,
+  duration: number
+): Promise<void> {
+  const call = await db.call.findUnique({ where: { callSid } });
+  if (!call) {
+    logger.warn('Recording ready for unknown call', { callSid });
+    return;
+  }
+
+  await db.call.update({
+    where: { callSid },
+    data: { recordingUrl, recordingSid, duration },
+  });
+
+  // Nothing to transcribe against for calls that never got going
+  if (call.status === 'IN_PROGRESS') return;
+
+  try {
+    const contextHint = call.callerName ? `The caller's name is ${call.callerName}.` : undefined;
+    const transcript = await transcribeRecording(recordingUrl, contextHint);
+    if (transcript.length < 20) return;
+
+    const updates: Record<string, unknown> = { transcript };
+
+    // If the live conversation failed to capture key details, the accurate
+    // audio transcript often has them — re-extract and backfill.
+    if (!call.callerName || !call.message) {
+      const extracted = await extractStructuredData(transcript);
+      if (!call.callerName && extracted.name) updates['callerName'] = extracted.name;
+      if (!call.callerCompany && extracted.company) updates['callerCompany'] = extracted.company;
+      if (!call.callerPhone && extracted.phone) updates['callerPhone'] = extracted.phone;
+      if (!call.callerEmail && extracted.email) updates['callerEmail'] = extracted.email;
+      if (!call.message && extracted.message) {
+        updates['message'] = extracted.message;
+        updates['summary'] = extracted.summary;
+      }
+    }
+
+    await db.call.update({ where: { callSid }, data: updates });
+    logger.info('Call record enhanced with audio transcript', { callSid });
+  } catch (err) {
+    logger.error('Failed to enhance call with recording', { callSid, err });
+  }
 }

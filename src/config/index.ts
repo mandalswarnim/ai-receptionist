@@ -17,7 +17,45 @@ const configSchema = z.object({
   // OpenAI
   OPENAI_API_KEY: z.string().startsWith('sk-'),
   OPENAI_MODEL: z.string().default('gpt-4o'),
-  WHISPER_MODEL: z.string().default('whisper-1'),
+  // Post-call speech-to-text model. gpt-4o-transcribe is noticeably more
+  // accurate than whisper-1 on phone audio; set WHISPER_MODEL=whisper-1 to revert.
+  WHISPER_MODEL: z.string().default('gpt-4o-transcribe'),
+
+  // Persona & voice
+  PERSONA_NAME: z.string().default('Maya'),
+  // Any Twilio <Say> voice. Generative voices sound far more human than Neural.
+  // British female: Polly.Amy-Generative | US female: Polly.Joanna-Generative
+  // US male: Polly.Matthew-Generative   | Google: Google.en-GB-Chirp3-HD-Aoede
+  TTS_VOICE: z.string().default('Polly.Amy-Generative'),
+  TTS_LANGUAGE: z.string().default('en-GB'),
+
+  // Live speech recognition (webhook/Gather mode)
+  // deepgram_nova-2 is far more accurate on conversational speech than phone_call.
+  SPEECH_MODEL: z.string().default('deepgram_nova-2'),
+  // Seconds of silence that ends a caller's utterance. Lower = snappier,
+  // higher = safer for callers who pause mid-sentence.
+  SPEECH_TIMEOUT: z.string().default('2'),
+  // Extra comma-separated vocabulary hints for speech recognition (names,
+  // product terms, local place names, etc.)
+  SPEECH_HINTS: z.string().default(''),
+
+  // ConversationRelay mode (streaming voice: ElevenLabs TTS + Deepgram STT + barge-in)
+  USE_CONVERSATION_RELAY: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true'),
+  RELAY_TTS_PROVIDER: z.string().default('ElevenLabs'),
+  // ElevenLabs voice ID. Default "Amelia" — a warm British female voice.
+  RELAY_VOICE: z.string().default('ZF6FPAbjXT4488VcRRnw'),
+  RELAY_TRANSCRIPTION_PROVIDER: z.string().default('Deepgram'),
+  RELAY_SPEECH_MODEL: z.string().default('nova-2-general'),
+
+  // Call recording (enables accurate post-call transcription).
+  // The greeting includes a recording disclosure line when this is on.
+  RECORD_CALLS: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true'),
 
   // Email (Gmail SMTP)
   SMTP_HOST: z.string().default('smtp.gmail.com'),
@@ -55,3 +93,6 @@ export const config = loadConfig();
 
 export const isDev = config.NODE_ENV === 'development';
 export const isProd = config.NODE_ENV === 'production';
+
+/** wss:// equivalent of BASE_URL, used for the ConversationRelay WebSocket. */
+export const wsBaseUrl = config.BASE_URL.replace(/^http/, 'ws');
