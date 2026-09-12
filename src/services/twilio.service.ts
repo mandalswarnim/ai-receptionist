@@ -4,7 +4,7 @@
 
 import twilio from 'twilio';
 import VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
-import { config, wsBaseUrl } from '../config';
+import { config, wsBaseUrl, relayAuthToken } from '../config';
 import { logger } from '../lib/logger';
 
 export const twilioClient = twilio(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN);
@@ -103,34 +103,34 @@ export function buildErrorTwiml(): string {
 
 // ─── TwiML builder (ConversationRelay mode) ──────────────────────────────────
 
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
 /**
  * ConversationRelay TwiML: Twilio streams caller speech to our WebSocket as
  * text and speaks whatever text we send back (ElevenLabs TTS + Deepgram STT),
- * with barge-in handled natively. Built as raw XML so it works regardless of
- * the installed twilio SDK version.
+ * with barge-in handled natively.
  */
 export function buildRelayTwiml(greeting: string): string {
-  const attrs = [
-    `url="${escapeXml(`${wsBaseUrl}/api/relay`)}"`,
-    `welcomeGreeting="${escapeXml(greeting)}"`,
-    `ttsProvider="${escapeXml(config.RELAY_TTS_PROVIDER)}"`,
-    `voice="${escapeXml(config.RELAY_VOICE)}"`,
-    `transcriptionProvider="${escapeXml(config.RELAY_TRANSCRIPTION_PROVIDER)}"`,
-    `speechModel="${escapeXml(config.RELAY_SPEECH_MODEL)}"`,
-    `transcriptionLanguage="${escapeXml(config.TTS_LANGUAGE)}"`,
-    `interruptible="speech"`,
-  ].join(' ');
-
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><ConversationRelay ${attrs}/></Connect></Response>`;
+  const twiml = new VoiceResponse();
+  twiml.connect().conversationRelay({
+    url: `${wsBaseUrl}/api/relay?token=${relayAuthToken}`,
+    welcomeGreeting: greeting,
+    welcomeGreetingInterruptible: 'speech',
+    ttsProvider: config.RELAY_TTS_PROVIDER,
+    voice: config.RELAY_VOICE,
+    transcriptionProvider: config.RELAY_TRANSCRIPTION_PROVIDER,
+    speechModel: config.RELAY_SPEECH_MODEL,
+    transcriptionLanguage: config.TTS_LANGUAGE,
+    ttsLanguage: config.TTS_LANGUAGE,
+    interruptible: 'speech',
+    // Bias STT toward the words we expect (company, persona, "at gmail dot com")
+    hints: speechHints(),
+    // Lets callers type their phone number instead of dictating it
+    dtmfDetection: true,
+    // Reads "07700 900123" and "james@acme.co.uk" naturally instead of
+    // spelling punctuation out
+    elevenlabsTextNormalization: 'auto',
+    profanityFilter: false,
+  });
+  return twiml.toString();
 }
 
 // ─── Recording helpers ───────────────────────────────────────────────────────

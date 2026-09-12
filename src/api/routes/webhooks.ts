@@ -179,10 +179,9 @@ router.post('/gather', async (req: Request, res: Response) => {
 
 // ─── 3. Recording Callback ───────────────────────────────────────────────────
 //
-// Fires shortly after the call ends. The summary email has usually already
-// gone out (built from the live conversation), so this upgrades the stored
-// transcript with an accurate audio transcription and backfills any details
-// the live conversation missed.
+// Fires shortly after the call ends. Post-call processing waits up to
+// RECORDING_WAIT_MS for this so the summary email is built from the accurate
+// audio transcript; if it arrives later, the stored record is upgraded.
 
 router.post('/recording', async (req: Request, res: Response) => {
   const body = req.body as TwilioRecordingPayload;
@@ -196,7 +195,7 @@ router.post('/recording', async (req: Request, res: Response) => {
   const duration = parseInt(RecordingDuration ?? '0', 10);
 
   callSvc
-    .enhanceCallWithRecording(callSid, recordingUrl, recordingSid, duration)
+    .handleRecordingReady({ callSid, recordingUrl, recordingSid, duration })
     .catch((err) => logger.error('Error processing recording', { callSid, err }));
 });
 

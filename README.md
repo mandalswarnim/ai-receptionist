@@ -23,10 +23,11 @@ Customer calls business phone
          │
    ┌─────┴──────────────────────────────────┐
    │         POST-CALL                      │
-   │  GPT-4o structured data extraction     │
+   │  Wait (≤25s) for the call recording    │
+   │  Recording → gpt-4o-transcribe         │
+   │  Live + audio transcript → structured  │
+   │  extraction (strict JSON schema)       │
    │  Save to PostgreSQL → Email summary    │
-   │  Recording → gpt-4o-transcribe →       │
-   │  accurate transcript backfilled        │
    └────────────────────────────────────────┘
 ```
 
@@ -40,8 +41,9 @@ env var (`USE_CONVERSATION_RELAY`):
 | | **ConversationRelay** (default) | **Gather webhooks** (fallback) |
 |---|---|---|
 | Voice | ElevenLabs "Amelia" (British female, genuinely human) | Amazon Polly Generative (`Polly.Amy-Generative`) |
-| Live transcription | Deepgram Nova (streaming) | Deepgram Nova-2 via Twilio Gather |
+| Live transcription | Deepgram Nova-3 (streaming, auto end-of-turn) | Deepgram Nova-2 via Twilio Gather |
 | Caller can interrupt | ✅ native barge-in | ✅ within each Gather |
+| Keypad phone-number entry | ✅ (digits + `#`) | ❌ |
 | Latency | Lowest (token streaming straight to TTS) | Moderate (turn-based) |
 | Transport | WebSocket (`/api/relay`) | HTTP webhooks |
 
@@ -57,7 +59,7 @@ Both modes share the same persona, post-call pipeline, database, and email.
 | AI Voice   | ElevenLabs (relay) / Amazon Polly Generative (webhook)|
 | Live STT   | Deepgram Nova                                         |
 | Post-call STT | OpenAI gpt-4o-transcribe (on the call recording)   |
-| LLM        | OpenAI GPT-4o (streaming in relay mode)               |
+| LLM        | OpenAI gpt-4.1-mini live (streaming), gpt-4.1 post-call |
 | Backend    | Node.js + TypeScript + Express + ws                   |
 | Database   | PostgreSQL + Prisma ORM                               |
 | Email      | Gmail SMTP via Nodemailer                             |
@@ -192,6 +194,18 @@ In your phone settings or provider portal, enable:
 
 ## Testing
 
+### Unit tests
+
+```bash
+npm test
+```
+
+### Inspect the TwiML the server returns (no phone needed)
+
+```bash
+npx ts-node scripts/print-twiml.ts
+```
+
 ### Test the AI conversation locally (no phone needed)
 
 ```bash
@@ -219,6 +233,9 @@ Once call forwarding is set up on your business phone, call your business number
 ## API Endpoints
 
 ### Admin
+
+All admin routes except `/health` require `Authorization: Bearer <ADMIN_API_KEY>`
+when `ADMIN_API_KEY` is set (mandatory in production).
 
 | Method | Path                        | Description                        |
 |--------|-----------------------------|------------------------------------|
@@ -264,18 +281,21 @@ The email includes:
 | `TWILIO_AUTH_TOKEN`  | Yes    | Twilio auth token                            |
 | `TWILIO_PHONE_NUMBER`| Yes    | Your Twilio number in `+E.164` format        |
 | `OPENAI_API_KEY`   | Yes      | Must have billing credits                    |
-| `OPENAI_MODEL`     | No       | Default: `gpt-4o` (`gpt-4o-mini` is faster/cheaper) |
+| `OPENAI_MODEL`     | No       | Live conversation model. Default: `gpt-4.1-mini` (fastest to first token) |
+| `EXTRACTION_MODEL` | No       | Post-call extraction model. Default: `gpt-4.1` |
 | `WHISPER_MODEL`    | No       | Post-call STT. Default: `gpt-4o-transcribe`  |
 | `PERSONA_NAME`     | No       | Receptionist's name. Default: `Maya`         |
 | `USE_CONVERSATION_RELAY` | No | `true` (default) = streaming ElevenLabs voice; `false` = Polly webhooks |
 | `RELAY_VOICE`      | No       | ElevenLabs voice ID. Default: Amelia (British female) |
-| `RELAY_SPEECH_MODEL` | No     | Deepgram model for relay STT. Default: `nova-2-general` |
+| `RELAY_SPEECH_MODEL` | No     | Deepgram model for relay STT. Default: `nova-3-general` |
 | `TTS_VOICE`        | No       | Webhook-mode voice. Default: `Polly.Amy-Generative` |
 | `TTS_LANGUAGE`     | No       | Default: `en-GB`                             |
 | `SPEECH_MODEL`     | No       | Webhook-mode live STT. Default: `deepgram_nova-2` |
 | `SPEECH_TIMEOUT`   | No       | Silence (s) ending an utterance. Default: `2` |
 | `SPEECH_HINTS`     | No       | Extra comma-separated vocabulary hints        |
 | `RECORD_CALLS`     | No       | Default: `true`. Greeting discloses recording; check consent rules for your jurisdiction |
+| `RECORDING_WAIT_MS`| No       | Wait for the recording before extracting/emailing. Default: `25000` |
+| `ADMIN_API_KEY`    | Prod     | Bearer token for `/api/calls/*`. Admin API is disabled in prod without it |
 | `SMTP_HOST`        | No       | Default: `smtp.gmail.com`                    |
 | `SMTP_PORT`        | No       | Default: `587`                               |
 | `SMTP_USER`        | Yes      | Your Gmail address                           |
@@ -307,6 +327,7 @@ npm start
 - [ ] OpenAI API has billing credits
 - [ ] Run `npm run db:migrate` after deploy
 - [ ] Twilio webhooks updated to production URL via `npx ts-node scripts/setup-twilio.ts`
+- [ ] `ADMIN_API_KEY` set to a long random string
 
 ---
 
@@ -319,7 +340,11 @@ src/
 ├── types/index.ts                # TypeScript types
 ├── lib/
 │   ├── db.ts                     # Prisma singleton
-│   └── logger.ts                 # Winston logger
+│   ├── logger.ts                 # Winston logger
+│   ├── sentinel.ts               # Strips [END_CALL] from the token stream
+│   ├── dtmf.ts                   # Keypad digit buffering
+│   ├── urgency.ts                # Normalises model output onto the urgency enum
+│   └── html.ts                   # HTML escaping for emails
 ├── services/
 │   ├── conversation.service.ts   # In-memory call session state
 │   ├── ai.service.ts             # GPT-4o conversation (JSON + streaming) + extraction
@@ -336,8 +361,10 @@ src/
         └── calls.ts               # Admin REST API
 prisma/
 └── schema.prisma                  # Call + ConversationTurn models
+tests/                             # vitest unit tests (npm test)
 scripts/
 ├── setup-twilio.ts                # Wire Twilio webhooks automatically
+├── print-twiml.ts                 # Print the TwiML for an incoming call
 ├── test-call.ts                   # Make a real outbound test call
 └── test-flow.ts                   # Simulate a call locally (no Twilio)
 ```

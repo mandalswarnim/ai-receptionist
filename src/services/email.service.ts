@@ -6,6 +6,7 @@ import nodemailer from 'nodemailer';
 import { config } from '../config';
 import { ExtractedCallData } from '../types';
 import { logger } from '../lib/logger';
+import { escapeHtml } from '../lib/html';
 
 const transporter = nodemailer.createTransport({
   host: config.SMTP_HOST,
@@ -42,7 +43,16 @@ function urgencyBadge(urgency: string): string {
   return badges[urgency] ?? '⚪ Unknown';
 }
 
-function buildHtmlEmail(data: ExtractedCallData, callSid: string, timestamp: Date): string {
+function buildHtmlEmail(raw: ExtractedCallData, callSid: string, timestamp: Date): string {
+  const data: ExtractedCallData = {
+    ...raw,
+    name: escapeHtml(raw.name),
+    company: escapeHtml(raw.company),
+    phone: escapeHtml(raw.phone),
+    email: escapeHtml(raw.email),
+    message: escapeHtml(raw.message),
+    summary: escapeHtml(raw.summary),
+  };
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -153,7 +163,8 @@ export async function sendCallSummaryEmail(
   timestamp: Date
 ): Promise<void> {
   const callerDisplay = data.name || data.phone || 'Unknown Caller';
-  const subject = `New Missed Call Message from ${callerDisplay}`;
+  const urgencyTag = data.urgency === 'urgent' ? '🔴 URGENT — ' : data.urgency === 'high' ? '🟠 ' : '';
+  const subject = `${urgencyTag}New Missed Call Message from ${callerDisplay}`;
 
   await transporter.sendMail({
     from: `"${config.EMAIL_FROM_NAME}" <${config.SMTP_USER}>`,

@@ -13,9 +13,10 @@ import * as conversationSvc from './conversation.service';
 import * as aiSvc from './ai.service';
 import * as callSvc from './call.service';
 import { startCallRecording, endCall } from './twilio.service';
+import { DtmfBuffer, formatDtmfUtterance } from '../lib/dtmf';
 
 interface RelayMessage {
-  type: 'setup' | 'prompt' | 'interrupt' | 'dtmf' | 'error';
+  type: 'setup' | 'prompt' | 'interrupt' | 'dtmf' | 'error' | 'info';
   callSid?: string;
   from?: string;
   to?: string;
@@ -27,7 +28,7 @@ interface RelayMessage {
 }
 
 /** Rough TTS pacing used to wait for the goodbye to finish before hanging up. */
-function speechDurationMs(text: string): number {
+export function speechDurationMs(text: string): number {
   return Math.min(Math.max((text.length / 15) * 1000, 2000), 10_000);
 }
 
@@ -36,6 +37,23 @@ export function handleRelayConnection(ws: WebSocket): void {
   // Bumped on every new caller prompt so replies to superseded prompts
   // (e.g. after a barge-in) stop being sent to the caller.
   let promptEpoch = 0;
+  // Cancels the in-flight LLM stream when a newer prompt supersedes it.
+  let inflight: AbortController | undefined;
+  let hangupTimer: NodeJS.Timeout | undefined;
+
+  const submitPrompt = (utterance: string) => {
+    inflight?.abort();
+    inflight = new AbortController();
+    void handlePrompt(ws, callSid, utterance, ++promptEpoch, () => promptEpoch, inflight, (ms) => {
+      hangupTimer = setTimeout(() => void endCall(callSid), ms);
+      hangupTimer.unref();
+    });
+  };
+
+  const dtmf = new DtmfBuffer((digits) => {
+    logger.info('Relay: keypad input', { callSid, digits });
+    submitPrompt(formatDtmfUtterance(digits));
+  });
 
   ws.on('message', (raw: Buffer) => {
     let msg: RelayMessage;
@@ -67,13 +85,23 @@ export function handleRelayConnection(ws: WebSocket): void {
 
       case 'prompt': {
         if (!msg.last || !msg.voicePrompt) return;
-        void handlePrompt(ws, callSid, msg.voicePrompt, ++promptEpoch, () => promptEpoch);
+        // Speech after the goodbye shouldn't reopen the conversation
+        if (hangupTimer) return;
+        dtmf.flush();
+        submitPrompt(msg.voicePrompt);
+        break;
+      }
+
+      case 'dtmf': {
+        if (hangupTimer || !msg.digit) return;
+        dtmf.push(msg.digit);
         break;
       }
 
       case 'interrupt': {
         // Caller talked over the AI: keep only what was actually spoken so
         // the conversation history matches what the caller heard.
+        inflight?.abort();
         const session = conversationSvc.getSession(callSid);
         const lastTurn = session?.turns[session.turns.length - 1];
         if (lastTurn?.role === 'assistant' && msg.utteranceUntilInterrupt) {
@@ -83,8 +111,7 @@ export function handleRelayConnection(ws: WebSocket): void {
         break;
       }
 
-      case 'dtmf':
-        logger.debug('Relay: DTMF received', { callSid, digit: msg.digit });
+      case 'info':
         break;
 
       case 'error':
@@ -94,6 +121,9 @@ export function handleRelayConnection(ws: WebSocket): void {
   });
 
   ws.on('close', () => {
+    inflight?.abort();
+    dtmf.dispose();
+    if (hangupTimer) clearTimeout(hangupTimer);
     if (!callSid) return;
     logger.info('Relay session closed', { callSid });
 
@@ -102,9 +132,10 @@ export function handleRelayConnection(ws: WebSocket): void {
 
     const hasCallerInput = finalState.turns.some((t) => t.role === 'caller');
     if (hasCallerInput) {
+      const duration = Math.round((Date.now() - finalState.startedAt.getTime()) / 1000);
       setImmediate(() => {
         callSvc
-          .processCompletedCall(finalState)
+          .processCompletedCall(finalState, undefined, undefined, duration)
           .catch((err) => logger.error('Relay: post-call processing failed', { callSid, err }));
       });
     } else {
@@ -125,7 +156,9 @@ async function handlePrompt(
   callSid: string,
   voicePrompt: string,
   epoch: number,
-  currentEpoch: () => number
+  currentEpoch: () => number,
+  abort: AbortController,
+  scheduleHangup: (ms: number) => void
 ): Promise<void> {
   const state = conversationSvc.getSession(callSid);
   if (!state) {
@@ -137,22 +170,36 @@ async function handlePrompt(
   logger.info('Relay: caller said', { callSid, voicePrompt });
 
   const live = () => currentEpoch() === epoch && ws.readyState === ws.OPEN;
+  const startedAt = Date.now();
+  let firstTokenAt: number | undefined;
 
   try {
-    const { fullText, endCall: shouldEnd } = await aiSvc.streamResponse(state, (token) => {
-      if (live()) ws.send(JSON.stringify({ type: 'text', token, last: false }));
-    });
+    const { fullText, endCall: shouldEnd } = await aiSvc.streamResponse(
+      state,
+      (token) => {
+        if (!live()) return;
+        firstTokenAt ??= Date.now();
+        ws.send(JSON.stringify({ type: 'text', token, last: false }));
+      },
+      abort.signal
+    );
 
     if (!live()) return; // superseded by a newer prompt or the socket closed
 
     ws.send(JSON.stringify({ type: 'text', token: '', last: true }));
     conversationSvc.addTurn(callSid, 'assistant', fullText);
+    logger.info('Relay: reply sent', {
+      callSid,
+      ttfbMs: firstTokenAt ? firstTokenAt - startedAt : null,
+      totalMs: Date.now() - startedAt,
+    });
 
     if (shouldEnd) {
       logger.info('Relay: conversation complete, ending call', { callSid });
-      setTimeout(() => void endCall(callSid), speechDurationMs(fullText)).unref();
+      scheduleHangup(speechDurationMs(fullText));
     }
   } catch (err) {
+    if (abort.signal.aborted) return; // superseded — expected
     logger.error('Relay: response generation failed', { callSid, err });
     if (live()) {
       ws.send(

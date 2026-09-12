@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
 import { WebSocketServer } from 'ws';
-import { config, isDev } from './config';
+import { config, isDev, relayAuthToken } from './config';
 import { logger } from './lib/logger';
 import { connectDb, disconnectDb } from './lib/db';
 import webhookRoutes from './api/routes/webhooks';
@@ -62,7 +62,18 @@ async function start() {
   const server = http.createServer(app);
 
   // ConversationRelay streams caller speech to this WebSocket (see relay.service.ts)
-  const wss = new WebSocketServer({ server, path: '/api/relay' });
+  const wss = new WebSocketServer({
+    server,
+    path: '/api/relay',
+    // Twilio doesn't sign WebSocket upgrades, so the TwiML embeds a shared
+    // secret in the URL and we reject anything without it.
+    verifyClient: ({ req }, done) => {
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const ok = url.searchParams.get('token') === relayAuthToken;
+      if (!ok) logger.warn('Relay: rejected unauthenticated websocket', { ip: req.socket.remoteAddress });
+      done(ok, 401, 'Unauthorized');
+    },
+  });
   wss.on('connection', handleRelayConnection);
 
   server.listen(config.PORT, () => {

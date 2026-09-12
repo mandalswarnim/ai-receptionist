@@ -9,12 +9,47 @@
  * GET    /api/health                   — Health check
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import { timingSafeEqual } from 'crypto';
+import { config, isProd } from '../../config';
 import { db } from '../../lib/db';
 import { logger } from '../../lib/logger';
 import { getActiveSessionCount } from '../../services/conversation.service';
 
 const router = Router();
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+//
+// Call records contain names, numbers and messages from real people. When
+// ADMIN_API_KEY is set every route below (except /health) requires
+// `Authorization: Bearer <key>`. In production we refuse to serve without it.
+
+if (isProd && !config.ADMIN_API_KEY) {
+  logger.warn('ADMIN_API_KEY is not set — the admin API is disabled in production');
+}
+
+function requireAdminKey(req: Request, res: Response, next: NextFunction): void {
+  if (req.path === '/health') return next();
+  const expected = config.ADMIN_API_KEY;
+  if (!expected) {
+    if (isProd) {
+      res.status(503).json({ error: 'Admin API disabled: set ADMIN_API_KEY' });
+      return;
+    }
+    return next(); // dev convenience
+  }
+  const header = req.headers.authorization ?? '';
+  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
+
+router.use(requireAdminKey);
 
 // ─── Health check ────────────────────────────────────────────────────────────
 
