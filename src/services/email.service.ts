@@ -78,7 +78,7 @@ function buildHtmlEmail(raw: ExtractedCallData, callSid: string, timestamp: Date
     .detail-label { font-size: 14px; color: #6b7280; width: 120px; flex-shrink: 0; }
     .detail-value { font-size: 14px; color: #111827; font-weight: 500; }
     .message-box { background: #f9fafb; border-left: 4px solid #1e40af; padding: 16px; border-radius: 0 4px 4px 0; font-size: 14px; color: #374151; line-height: 1.6; }
-    .summary-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 16px; font-size: 14px; color: #1e40af; line-height: 1.6; }
+    .summary-box { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 16px; font-size: 14px; color: #1e40af; line-height: 1.6; white-space: pre-wrap; }
     .footer { padding: 16px 32px; background: #f9fafb; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; }
   </style>
 </head>

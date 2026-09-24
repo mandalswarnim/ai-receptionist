@@ -11,6 +11,9 @@ import webhookRoutes from './api/routes/webhooks';
 import callRoutes from './api/routes/calls';
 import { notFound, errorHandler } from './api/middleware';
 import { handleRelayConnection } from './services/relay.service';
+import { resendPendingEmails } from './services/call.service';
+
+const EMAIL_SWEEP_INTERVAL_MS = 10 * 60_000;
 
 const app = express();
 
@@ -75,6 +78,12 @@ async function start() {
     },
   });
   wss.on('connection', handleRelayConnection);
+
+  // Retry summary emails that never went out (SMTP outage, restart mid-send)
+  const sweepEmails = () =>
+    resendPendingEmails().catch((err) => logger.error('Email resend sweep failed', { err }));
+  void sweepEmails();
+  setInterval(sweepEmails, EMAIL_SWEEP_INTERVAL_MS).unref();
 
   server.listen(config.PORT, () => {
     logger.info(`AI Receptionist running`, {
