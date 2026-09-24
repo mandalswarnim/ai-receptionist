@@ -29,7 +29,8 @@ export interface ConversationState {
   turnCount: number;
   turns: Array<{ role: 'assistant' | 'caller'; content: string }>;
   startedAt: Date;
-  confirmed: boolean;
+  /** Consecutive turns where the caller said nothing (webhook mode). */
+  silentPrompts: number;
 }
 
 export interface ExtractedCallData {
@@ -40,27 +41,6 @@ export interface ExtractedCallData {
   message: string;
   urgency: UrgencyLevel;
   summary: string;
-}
-
-export interface CallRecord {
-  id: string;
-  callSid: string;
-  from: string;
-  to: string;
-  status: string;
-  startedAt: Date;
-  endedAt?: Date;
-  duration?: number;
-  recordingUrl?: string;
-  callerName?: string;
-  callerCompany?: string;
-  callerPhone?: string;
-  callerEmail?: string;
-  message?: string;
-  urgency?: string;
-  summary?: string;
-  transcript?: string;
-  emailSent: boolean;
 }
 
 // Twilio webhook payloads
@@ -75,12 +55,6 @@ export interface TwilioCallPayload {
 export interface TwilioGatherPayload extends TwilioCallPayload {
   SpeechResult?: string;
   Confidence?: string;
-}
-
-export interface TwilioDialStatusPayload extends TwilioCallPayload {
-  DialCallStatus: 'completed' | 'busy' | 'no-answer' | 'failed' | 'canceled';
-  DialCallSid?: string;
-  DialCallDuration?: string;
 }
 
 export interface TwilioRecordingPayload {

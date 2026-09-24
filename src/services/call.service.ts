@@ -11,6 +11,8 @@ import { sendCallSummaryEmail } from './email.service';
 import { sendSlackNotification } from './slack.service';
 import { sendUrgentSms } from './twilio.service';
 import { config } from '../config';
+import { withRetry } from '../lib/retry';
+import { isDialableNumber } from '../lib/phone';
 import { ConversationState, ExtractedCallData } from '../types';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
@@ -27,11 +29,15 @@ interface RecordingInfo {
   duration: number;
 }
 
-const recordingWaiters = new Map<string, (info: RecordingInfo) => void>();
+const recordingWaiters = new Map<string, (info?: RecordingInfo) => void>();
 // Recordings that landed before processing registered a waiter (rare, but
 // the hangup → recording-ready gap can be very short on tiny calls).
 const earlyRecordings = new Map<string, RecordingInfo>();
 const EARLY_RECORDING_TTL_MS = 60_000;
+
+// Set during shutdown: stop waiting for recordings so emails go out before
+// the process exits (the live transcript is used instead).
+let shuttingDown = false;
 
 function waitForRecording(callSid: string, timeoutMs: number): Promise<RecordingInfo | undefined> {
   const early = earlyRecordings.get(callSid);
@@ -39,6 +45,7 @@ function waitForRecording(callSid: string, timeoutMs: number): Promise<Recording
     earlyRecordings.delete(callSid);
     return Promise.resolve(early);
   }
+  if (shuttingDown) return Promise.resolve(undefined);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       recordingWaiters.delete(callSid);
@@ -68,6 +75,39 @@ export async function handleRecordingReady(info: RecordingInfo & { callSid: stri
   await enhanceCallWithRecording(info.callSid, info.recordingUrl, info.recordingSid, info.duration);
 }
 
+// ─── In-flight tracking ──────────────────────────────────────────────────────
+//
+// Post-call processing runs after the call has hung up, so nothing else
+// keeps the process alive for it. Track it so a deploy (SIGTERM) can wait for
+// the email to go out instead of silently dropping the message.
+
+const inflight = new Set<Promise<void>>();
+
+/** Runs post-call processing in the background, tracked for shutdown. */
+export function runPostCall(state: ConversationState, duration?: number): void {
+  const task: Promise<void> = processCompletedCall(state, undefined, undefined, duration)
+    .catch((err) => {
+      logger.error('Post-call processing failed', { callSid: state.callSid, err });
+    })
+    .finally(() => inflight.delete(task));
+  inflight.add(task);
+}
+
+/**
+ * Waits for in-flight post-call processing to finish. Recording waits are cut
+ * short so extraction proceeds immediately with the live transcript.
+ */
+export async function drainPostCallTasks(): Promise<void> {
+  shuttingDown = true;
+  for (const resolve of [...recordingWaiters.values()]) resolve(undefined);
+  if (inflight.size > 0) logger.info('Waiting for post-call processing', { count: inflight.size });
+  await Promise.all([...inflight]);
+}
+
+export function pendingPostCallCount(): number {
+  return inflight.size;
+}
+
 function toDbUrgency(urgency: string): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
   return normalizeUrgency(urgency).toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 }
@@ -78,6 +118,71 @@ async function transcribeSafely(recordingUrl: string, contextHint?: string): Pro
     return text.trim().length > 20 ? text : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Email body used when AI extraction failed: the raw transcript, capped. */
+export function fallbackSummary(transcript: string): string {
+  const MAX = 4000;
+  const body = transcript.length > MAX ? `${transcript.slice(0, MAX)}\n…(truncated)` : transcript;
+  return `The automatic summary could not be generated for this call. Full transcript:\n\n${body}`;
+}
+
+function sendEmailWithRetry(data: ExtractedCallData, callSid: string, startedAt: Date): Promise<void> {
+  return withRetry(() => sendCallSummaryEmail(data, callSid, startedAt), {
+    attempts: 3,
+    baseDelayMs: 2000,
+    onRetry: (err, attempt) => logger.warn('Call summary email failed — retrying', { callSid, attempt, err }),
+  });
+}
+
+// ─── Email resend sweep ──────────────────────────────────────────────────────
+//
+// Calls whose summary email never went out (SMTP down, server restarted
+// mid-retry...) are resent here. Silent calls have no summary, so they are
+// never picked up. The age window skips calls still being processed and
+// stops very old messages from suddenly being delivered.
+
+const RESEND_MIN_AGE_MS = 5 * 60_000;
+const RESEND_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+export async function resendPendingEmails(): Promise<void> {
+  const now = Date.now();
+  const pending = await db.call.findMany({
+    where: {
+      status: 'COMPLETED',
+      emailSent: false,
+      summary: { not: null },
+      endedAt: { lt: new Date(now - RESEND_MIN_AGE_MS), gt: new Date(now - RESEND_MAX_AGE_MS) },
+    },
+    orderBy: { endedAt: 'asc' },
+    take: 20,
+  });
+  if (pending.length === 0) return;
+
+  logger.info('Resending unsent call summary emails', { count: pending.length });
+  for (const call of pending) {
+    const data: ExtractedCallData = {
+      name: call.callerName ?? '',
+      company: call.callerCompany ?? '',
+      phone: call.callerPhone || (isDialableNumber(call.from) ? call.from : ''),
+      email: call.callerEmail ?? '',
+      message: call.message ?? '',
+      urgency: normalizeUrgency(call.urgency?.toLowerCase()),
+      summary: call.summary ?? '',
+    };
+    try {
+      await sendCallSummaryEmail(data, call.callSid, call.startedAt);
+      await db.call.update({
+        where: { id: call.id },
+        data: { emailSent: true, emailSentAt: new Date() },
+      });
+      logger.info('Resent call summary email', { callSid: call.callSid });
+    } catch (err) {
+      // SMTP is probably still down — try again on the next sweep.
+      logger.error('Resend of call summary email failed', { callSid: call.callSid, err });
+      return;
+    }
   }
 }
 
@@ -113,26 +218,38 @@ export async function processCompletedCall(
     const liveTranscript = buildTurnsTranscript(state.turns);
     const audioTranscript = recordingUrl ? await transcribeSafely(recordingUrl) : undefined;
 
-    // 2. Extract structured data from both transcripts
-    const extractedData = await extractStructuredData({
-      liveTranscript,
-      audioTranscript,
-      callerNumber: state.from,
-      known: state.collectedInfo,
-    });
+    // 2. Extract structured data from both transcripts. If extraction fails
+    //    (OpenAI outage, timeout...) the business still gets an email built
+    //    from the raw transcript rather than nothing at all.
+    let extractedData: Partial<ExtractedCallData> = {};
+    let extractionFailed = false;
+    try {
+      extractedData = await extractStructuredData({
+        liveTranscript,
+        audioTranscript,
+        callerNumber: state.from,
+        known: state.collectedInfo,
+      });
+    } catch (err) {
+      extractionFailed = true;
+      logger.error('Extraction failed — falling back to raw transcript', { callSid, err });
+    }
 
     // Seed with what the conversation service already collected
     const finalData: ExtractedCallData = {
       name: extractedData.name || state.collectedInfo.name || '',
       company: extractedData.company || state.collectedInfo.company || '',
-      phone: extractedData.phone || state.collectedInfo.phone || state.from,
+      phone: extractedData.phone || state.collectedInfo.phone || (isDialableNumber(state.from) ? state.from : ''),
       email: extractedData.email || state.collectedInfo.email || '',
       message: extractedData.message || state.collectedInfo.message || '',
       urgency: normalizeUrgency(extractedData.urgency || state.collectedInfo.urgency),
-      summary: extractedData.summary || extractedData.message || liveTranscript.slice(0, 500),
+      summary: extractionFailed
+        ? fallbackSummary(audioTranscript ?? liveTranscript)
+        : extractedData.summary || extractedData.message || liveTranscript.slice(0, 500),
     };
 
     // 3. Persist to database
+    const turns = state.turns.map((t, i) => ({ role: t.role, content: t.content, sequence: i }));
     const callFields = {
       status: 'COMPLETED' as const,
       endedAt: new Date(),
@@ -149,28 +266,36 @@ export async function processCompletedCall(
       transcript: audioTranscript ?? liveTranscript,
     };
 
-    const callRecord = await db.call.upsert({
-      where: { callSid },
-      create: {
-        callSid,
-        from: state.from,
-        to: config.TWILIO_PHONE_NUMBER,
-        startedAt: state.startedAt,
-        ...callFields,
-        turns: {
-          create: state.turns.map((t, i) => ({
-            role: t.role,
-            content: t.content,
-            sequence: i,
-          })),
+    // The record normally already exists (created when the call started), so
+    // the update branch must write the turns too — replacing any from an
+    // earlier attempt. Nested writes run in a single transaction.
+    let saved = false;
+    try {
+      await db.call.upsert({
+        where: { callSid },
+        create: {
+          callSid,
+          from: state.from,
+          to: config.TWILIO_PHONE_NUMBER,
+          startedAt: state.startedAt,
+          ...callFields,
+          turns: { create: turns },
         },
-      },
-      update: callFields,
-    });
+        update: {
+          ...callFields,
+          turns: { deleteMany: {}, create: turns },
+        },
+      });
+      saved = true;
+    } catch (err) {
+      // Still send the email — it is the deliverable. Log the data so the
+      // message is recoverable from logs if the email fails as well.
+      logger.error('Failed to save call — sending email anyway', { callSid, err, finalData });
+    }
 
     // 4. Notify — email is the deliverable; Slack/SMS run alongside it
     const [emailResult] = await Promise.allSettled([
-      sendCallSummaryEmail(finalData, callSid, state.startedAt),
+      sendEmailWithRetry(finalData, callSid, state.startedAt),
       sendSlackNotification(finalData, callSid, state.startedAt).catch((err) =>
         logger.error('Slack notification error', { err })
       ),
@@ -181,17 +306,27 @@ export async function processCompletedCall(
         : Promise.resolve(),
     ]);
 
-    if (emailResult.status === 'rejected') throw emailResult.reason;
-
-    await db.call.update({
-      where: { id: callRecord.id },
-      data: { emailSent: true, emailSentAt: new Date() },
-    });
+    if (emailResult.status === 'rejected') {
+      // The record stays COMPLETED with emailSent=false; resendPendingEmails()
+      // picks it up on the next sweep.
+      logger.error('Call summary email failed after retries — queued for resend', {
+        callSid,
+        err: emailResult.reason,
+        ...(saved ? {} : { finalData }),
+      });
+    } else if (saved) {
+      await db.call.update({
+        where: { callSid },
+        data: { emailSent: true, emailSentAt: new Date() },
+      });
+    }
 
     logger.info('Call processing complete', {
       callSid,
       urgency: finalData.urgency,
       usedAudioTranscript: !!audioTranscript,
+      extractionFailed,
+      emailSent: emailResult.status === 'fulfilled',
       totalMs: Date.now() - startedProcessing,
     });
   } catch (err) {
@@ -237,11 +372,26 @@ export async function createInitialCallRecord(
 }
 
 /** Closes out a call record that ended before the caller said anything. */
-export async function markCallCompleted(callSid: string): Promise<void> {
+export async function markCallNoInput(callSid: string): Promise<void> {
   await db.call.updateMany({
     where: { callSid },
-    data: { status: 'COMPLETED', endedAt: new Date() },
+    data: { status: 'NO_ANSWER', endedAt: new Date() },
   });
+}
+
+/**
+ * Hands a finished conversation to post-call processing, or closes the record
+ * quietly when the caller never spoke. Callers must have already taken the
+ * session out of the store (destroySession) — that is the once-only guard.
+ */
+export function finishCall(state: ConversationState, duration?: number): void {
+  if (state.turns.some((t) => t.role === 'caller')) {
+    runPostCall(state, duration);
+  } else {
+    markCallNoInput(state.callSid).catch((err) =>
+      logger.error('Failed to close call record', { callSid: state.callSid, err })
+    );
+  }
 }
 
 /**
