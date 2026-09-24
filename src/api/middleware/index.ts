@@ -22,11 +22,3 @@ export function errorHandler(
     error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
   });
 }
-
-export function requestLogger(req: Request, _res: Response, next: NextFunction): void {
-  logger.debug(`${req.method} ${req.path}`, {
-    ip: req.ip,
-    body: req.body as unknown,
-  });
-  next();
-}

@@ -12,6 +12,7 @@ import { sendSlackNotification } from './slack.service';
 import { sendUrgentSms } from './twilio.service';
 import { config } from '../config';
 import { withRetry } from '../lib/retry';
+import { isDialableNumber } from '../lib/phone';
 import { ConversationState, ExtractedCallData } from '../types';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
@@ -28,11 +29,15 @@ interface RecordingInfo {
   duration: number;
 }
 
-const recordingWaiters = new Map<string, (info: RecordingInfo) => void>();
+const recordingWaiters = new Map<string, (info?: RecordingInfo) => void>();
 // Recordings that landed before processing registered a waiter (rare, but
 // the hangup → recording-ready gap can be very short on tiny calls).
 const earlyRecordings = new Map<string, RecordingInfo>();
 const EARLY_RECORDING_TTL_MS = 60_000;
+
+// Set during shutdown: stop waiting for recordings so emails go out before
+// the process exits (the live transcript is used instead).
+let shuttingDown = false;
 
 function waitForRecording(callSid: string, timeoutMs: number): Promise<RecordingInfo | undefined> {
   const early = earlyRecordings.get(callSid);
@@ -40,6 +45,7 @@ function waitForRecording(callSid: string, timeoutMs: number): Promise<Recording
     earlyRecordings.delete(callSid);
     return Promise.resolve(early);
   }
+  if (shuttingDown) return Promise.resolve(undefined);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       recordingWaiters.delete(callSid);
@@ -67,6 +73,39 @@ export async function handleRecordingReady(info: RecordingInfo & { callSid: stri
   earlyRecordings.set(info.callSid, info);
   setTimeout(() => earlyRecordings.delete(info.callSid), EARLY_RECORDING_TTL_MS).unref();
   await enhanceCallWithRecording(info.callSid, info.recordingUrl, info.recordingSid, info.duration);
+}
+
+// ─── In-flight tracking ──────────────────────────────────────────────────────
+//
+// Post-call processing runs after the call has hung up, so nothing else
+// keeps the process alive for it. Track it so a deploy (SIGTERM) can wait for
+// the email to go out instead of silently dropping the message.
+
+const inflight = new Set<Promise<void>>();
+
+/** Runs post-call processing in the background, tracked for shutdown. */
+export function runPostCall(state: ConversationState, duration?: number): void {
+  const task: Promise<void> = processCompletedCall(state, undefined, undefined, duration)
+    .catch((err) => {
+      logger.error('Post-call processing failed', { callSid: state.callSid, err });
+    })
+    .finally(() => inflight.delete(task));
+  inflight.add(task);
+}
+
+/**
+ * Waits for in-flight post-call processing to finish. Recording waits are cut
+ * short so extraction proceeds immediately with the live transcript.
+ */
+export async function drainPostCallTasks(): Promise<void> {
+  shuttingDown = true;
+  for (const resolve of [...recordingWaiters.values()]) resolve(undefined);
+  if (inflight.size > 0) logger.info('Waiting for post-call processing', { count: inflight.size });
+  await Promise.all([...inflight]);
+}
+
+export function pendingPostCallCount(): number {
+  return inflight.size;
 }
 
 function toDbUrgency(urgency: string): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
@@ -126,7 +165,7 @@ export async function resendPendingEmails(): Promise<void> {
     const data: ExtractedCallData = {
       name: call.callerName ?? '',
       company: call.callerCompany ?? '',
-      phone: call.callerPhone ?? call.from,
+      phone: call.callerPhone || (isDialableNumber(call.from) ? call.from : ''),
       email: call.callerEmail ?? '',
       message: call.message ?? '',
       urgency: normalizeUrgency(call.urgency?.toLowerCase()),
@@ -200,7 +239,7 @@ export async function processCompletedCall(
     const finalData: ExtractedCallData = {
       name: extractedData.name || state.collectedInfo.name || '',
       company: extractedData.company || state.collectedInfo.company || '',
-      phone: extractedData.phone || state.collectedInfo.phone || state.from,
+      phone: extractedData.phone || state.collectedInfo.phone || (isDialableNumber(state.from) ? state.from : ''),
       email: extractedData.email || state.collectedInfo.email || '',
       message: extractedData.message || state.collectedInfo.message || '',
       urgency: normalizeUrgency(extractedData.urgency || state.collectedInfo.urgency),
@@ -333,11 +372,26 @@ export async function createInitialCallRecord(
 }
 
 /** Closes out a call record that ended before the caller said anything. */
-export async function markCallCompleted(callSid: string): Promise<void> {
+export async function markCallNoInput(callSid: string): Promise<void> {
   await db.call.updateMany({
     where: { callSid },
-    data: { status: 'COMPLETED', endedAt: new Date() },
+    data: { status: 'NO_ANSWER', endedAt: new Date() },
   });
+}
+
+/**
+ * Hands a finished conversation to post-call processing, or closes the record
+ * quietly when the caller never spoke. Callers must have already taken the
+ * session out of the store (destroySession) — that is the once-only guard.
+ */
+export function finishCall(state: ConversationState, duration?: number): void {
+  if (state.turns.some((t) => t.role === 'caller')) {
+    runPostCall(state, duration);
+  } else {
+    markCallNoInput(state.callSid).catch((err) =>
+      logger.error('Failed to close call record', { callSid: state.callSid, err })
+    );
+  }
 }
 
 /**

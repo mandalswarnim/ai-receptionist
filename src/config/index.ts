@@ -72,6 +72,19 @@ const configSchema = z.object({
   // the accurate audio transcript instead of live STT. 0 disables the wait.
   RECORDING_WAIT_MS: z.coerce.number().int().min(0).default(25_000),
 
+  // Call limits
+  // Timeout (ms) for each live-conversation LLM request. The SDK default is
+  // 10 minutes, which on a phone call means dead air.
+  LLM_TIMEOUT_MS: z.coerce.number().int().min(1000).default(8_000),
+  // Seconds of caller silence (after the AI finishes speaking) before the AI
+  // checks in; the same again with no response ends the call.
+  SILENCE_TIMEOUT_S: z.coerce.number().int().min(5).default(12),
+  // Hard cap on call length. The AI wraps up politely when it's reached.
+  MAX_CALL_DURATION_S: z.coerce.number().int().min(60).default(600),
+  // How long a SIGTERM waits for live calls and post-call processing (emails)
+  // to finish before exiting. Keep it inside your host's shutdown grace period.
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).default(25_000),
+
   // Email (Gmail SMTP)
   SMTP_HOST: z.string().default('smtp.gmail.com'),
   SMTP_PORT: z.string().default('587'),
@@ -92,9 +105,16 @@ const configSchema = z.object({
   ALERT_SMS_NUMBER: z.string().startsWith('+').optional(),
 
   // Security
-  // Bearer token required on /api/calls/* (the admin API). Strongly
-  // recommended in production — without it anyone can read/delete call data.
+  // Bearer token required on /api/calls/* (the admin API). Without it the
+  // admin API is disabled — call records hold real people's details.
   ADMIN_API_KEY: z.string().min(16).optional(),
+  // Skips Twilio webhook signature validation. Only for local testing where
+  // signatures can't match (e.g. curl); ngrok works fine with validation on.
+  // Refused in production.
+  SKIP_TWILIO_SIGNATURE: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 function loadConfig() {
@@ -104,6 +124,10 @@ function loadConfig() {
     result.error.issues.forEach((issue) => {
       console.error(`   ${issue.path.join('.')}: ${issue.message}`);
     });
+    process.exit(1);
+  }
+  if (result.data.SKIP_TWILIO_SIGNATURE && result.data.NODE_ENV === 'production') {
+    console.error('❌ SKIP_TWILIO_SIGNATURE=true is not allowed in production');
     process.exit(1);
   }
   return result.data;

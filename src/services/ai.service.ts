@@ -14,10 +14,24 @@ import { logger } from '../lib/logger';
 
 import { END_CALL_TOKEN, SentinelFilter } from '../lib/sentinel';
 import { normalizeUrgency, URGENCY_VALUES } from '../lib/urgency';
+import { isDialableNumber } from '../lib/phone';
 
 export { END_CALL_TOKEN, normalizeUrgency };
 
-const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
+// Live turns are on the caller's critical path: fail fast (one quick retry)
+// rather than leave dead air. The SDK default is a 10-minute timeout.
+const liveClient = new OpenAI({
+  apiKey: config.OPENAI_API_KEY,
+  timeout: config.LLM_TIMEOUT_MS,
+  maxRetries: 1,
+});
+
+// Post-call extraction runs off the critical path and can afford to wait.
+const extractionClient = new OpenAI({
+  apiKey: config.OPENAI_API_KEY,
+  timeout: 60_000,
+  maxRetries: 2,
+});
 
 // ─── System prompt ──────────────────────────────────────────────────────────
 
@@ -39,7 +53,11 @@ How you speak:
 What you need before saying goodbye:
 1. Their name (required)
 2. Company (optional — ask once, drop it if they skip it)
-3. Best number to reach them (required). They're calling from ${callerNumber} — if that looks like a real number, just ask "is the number you're calling from the best one to reach you on?" instead of making them dictate one.
+3. Best number to reach them (required). ${
+    isDialableNumber(callerNumber)
+      ? `They're calling from ${callerNumber} — just ask "is the number you're calling from the best one to reach you on?" instead of making them dictate one.`
+      : `Their caller ID is withheld, so you'll need to ask them for a number.`
+  }
 4. Email (optional — ask once, confirm spelling if given)
 5. What the call is about (required — get enough detail to be useful)
 6. Whether it's urgent
@@ -133,7 +151,7 @@ Only include extracted fields that were mentioned in the caller's latest message
   });
 
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await liveClient.chat.completions.create({
       model: config.OPENAI_MODEL,
       messages,
       response_format: {
@@ -239,7 +257,7 @@ export async function streamResponse(
     ...historyMessages(state),
   ];
 
-  const stream = await openai.chat.completions.create(
+  const stream = await liveClient.chat.completions.create(
     {
       model: config.OPENAI_MODEL,
       messages,
@@ -275,6 +293,13 @@ export function buildGreeting(): string {
   );
 }
 
+// Canned lines for call limits (silence / max duration), shared by both modes
+export const SILENCE_NUDGE = "Are you still there? No rush — I'm here whenever you're ready.";
+export const SILENCE_GOODBYE =
+  "I can't seem to hear anything, so I'll let you go. Feel free to call back any time. Goodbye!";
+export const TIME_LIMIT_GOODBYE =
+  "I'm sorry, I need to wrap up the call here — I've passed on everything you've told me and someone will get back to you. Goodbye!";
+
 // ─── Data extraction ─────────────────────────────────────────────────────────
 
 export interface ExtractionInput {
@@ -304,7 +329,7 @@ export async function extractStructuredData(input: ExtractionInput | string): Pr
 
 ${sources.join('\n\n')}
 
-Caller ID (the number they called from): ${params.callerNumber || 'unknown'}
+Caller ID (the number they called from): ${isDialableNumber(params.callerNumber) ? params.callerNumber : 'withheld (do not use as the phone number)'}
 ${params.known && Object.keys(params.known).length ? `Details already confirmed during the call: ${JSON.stringify(params.known)}` : ''}
 
 Rules:
@@ -317,7 +342,7 @@ Rules:
 - "summary": a 3-5 sentence professional summary suitable for email, covering who called, what they want, urgency, and any requested follow-up.
 - "urgency": one of low, medium, high, urgent — infer from context if not stated.`;
 
-  const completion = await openai.chat.completions.create({
+  const completion = await extractionClient.chat.completions.create({
     model: config.EXTRACTION_MODEL,
     messages: [{ role: 'user', content: prompt }],
     response_format: {

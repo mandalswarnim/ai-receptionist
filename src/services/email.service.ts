@@ -8,10 +8,12 @@ import { ExtractedCallData } from '../types';
 import { logger } from '../lib/logger';
 import { escapeHtml } from '../lib/html';
 
+const smtpPort = parseInt(config.SMTP_PORT, 10);
+
 const transporter = nodemailer.createTransport({
   host: config.SMTP_HOST,
-  port: parseInt(config.SMTP_PORT),
-  secure: false, // true for 465, false for 587 (STARTTLS)
+  port: smtpPort,
+  secure: smtpPort === 465, // implicit TLS on 465; STARTTLS on 587
   auth: {
     user: config.SMTP_USER,
     pass: config.SMTP_PASS,

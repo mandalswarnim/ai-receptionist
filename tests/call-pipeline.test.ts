@@ -5,22 +5,29 @@ const mocks = vi.hoisted(() => ({
   upsert: vi.fn(),
   update: vi.fn(),
   findMany: vi.fn(),
-  extract: vi.fn(),
-  sendEmail: vi.fn(),
-}));
-
-vi.mock('../src/config', () => ({
+  updateMany: vi.fn(),
   config: {
     RECORD_CALLS: false,
     RECORDING_WAIT_MS: 0,
     TWILIO_PHONE_NUMBER: '+15550000000',
   },
+  extract: vi.fn(),
+  sendEmail: vi.fn(),
 }));
+
+vi.mock('../src/config', () => ({ config: mocks.config }));
 vi.mock('../src/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock('../src/lib/db', () => ({
-  db: { call: { upsert: mocks.upsert, update: mocks.update, findMany: mocks.findMany } },
+  db: {
+    call: {
+      upsert: mocks.upsert,
+      update: mocks.update,
+      findMany: mocks.findMany,
+      updateMany: mocks.updateMany,
+    },
+  },
 }));
 vi.mock('../src/lib/retry', () => ({
   // Same semantics, no real delays
@@ -49,7 +56,14 @@ vi.mock('../src/services/email.service', () => ({ sendCallSummaryEmail: mocks.se
 vi.mock('../src/services/slack.service', () => ({ sendSlackNotification: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../src/services/twilio.service', () => ({ sendUrgentSms: vi.fn() }));
 
-import { processCompletedCall, resendPendingEmails } from '../src/services/call.service';
+import {
+  processCompletedCall,
+  resendPendingEmails,
+  finishCall,
+  runPostCall,
+  drainPostCallTasks,
+  pendingPostCallCount,
+} from '../src/services/call.service';
 
 function state(): ConversationState {
   return {
@@ -63,7 +77,7 @@ function state(): ConversationState {
       { role: 'caller', content: "It's James, calling about my invoice." },
     ],
     startedAt: new Date('2026-09-01T10:00:00Z'),
-    confirmed: false,
+    silentPrompts: 0,
   };
 }
 
@@ -83,6 +97,7 @@ beforeEach(() => {
   mocks.update.mockResolvedValue({});
   mocks.extract.mockResolvedValue(extracted);
   mocks.sendEmail.mockResolvedValue(undefined);
+  mocks.updateMany.mockResolvedValue({ count: 1 });
 });
 
 describe('processCompletedCall', () => {
@@ -182,5 +197,44 @@ describe('resendPendingEmails', () => {
 
     expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('finishCall', () => {
+  it('marks calls where the caller never spoke as NO_ANSWER without emailing', async () => {
+    const silent = { ...state(), turns: [{ role: 'assistant' as const, content: 'Hello?' }] };
+
+    finishCall(silent);
+    await vi.waitFor(() => expect(mocks.updateMany).toHaveBeenCalled());
+
+    expect(mocks.updateMany.mock.calls[0][0]).toMatchObject({
+      where: { callSid: 'CA123' },
+      data: { status: 'NO_ANSWER' },
+    });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('uses no phone number when the caller ID is withheld', async () => {
+    mocks.extract.mockResolvedValue({ ...extracted, phone: '' });
+
+    await processCompletedCall({ ...state(), from: 'anonymous' });
+
+    expect(mocks.sendEmail.mock.calls[0][0].phone).toBe('');
+  });
+});
+
+// Must run last: draining puts the module into shutdown mode.
+describe('drainPostCallTasks', () => {
+  it('stops waiting for the recording and gets the email out', async () => {
+    mocks.config.RECORD_CALLS = true;
+    mocks.config.RECORDING_WAIT_MS = 60_000;
+
+    runPostCall(state());
+    expect(pendingPostCallCount()).toBe(1);
+
+    await drainPostCallTasks(); // would hang for 60s if the wait weren't cut short
+
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    expect(pendingPostCallCount()).toBe(0);
   });
 });
