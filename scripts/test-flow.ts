@@ -1,6 +1,6 @@
 /**
  * Local test script that simulates a full call flow without Twilio.
- * Run: npx ts-node scripts/test-flow.ts
+ * Run: npx ts-node scripts/test-flow.ts [--send-email]
  */
 
 import dotenv from 'dotenv';
@@ -21,7 +21,7 @@ async function simulateConversation(): Promise<void> {
   console.log('═══════════════════════════════════════════════\n');
 
   // 1. Create session
-  const state = conversationSvc.createSession(FAKE_CALL_SID, FAKE_FROM);
+  conversationSvc.createSession(FAKE_CALL_SID, FAKE_FROM);
   const greeting = aiSvc.buildGreeting();
   conversationSvc.addTurn(FAKE_CALL_SID, 'assistant', greeting);
   conversationSvc.advanceStep(FAKE_CALL_SID, 'collect_name');
@@ -82,10 +82,12 @@ async function simulateConversation(): Promise<void> {
   const extracted = await extractStructuredData(transcript);
   console.log(JSON.stringify(extracted, null, 2));
 
-  // 5. Test email (uncomment if SendGrid is configured)
-  // console.log('\n Sending test email...');
-  // await sendCallSummaryEmail(extracted, FAKE_CALL_SID, finalState.startedAt);
-  // console.log(' Email sent!');
+  // 5. Send the summary email to BUSINESS_EMAIL (opt-in: it's a real send)
+  if (process.argv.includes('--send-email')) {
+    console.log('\n Sending test email...');
+    await sendCallSummaryEmail(extracted, FAKE_CALL_SID, finalState.startedAt);
+    console.log(' Email sent!');
+  }
 
   console.log('\n Test flow complete.\n');
 }

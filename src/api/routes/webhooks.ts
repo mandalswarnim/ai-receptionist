@@ -32,11 +32,20 @@ import * as callSvc from '../../services/call.service';
 
 const router = Router();
 
+/** Consecutive silent turns tolerated before the AI says goodbye. */
+const MAX_SILENT_PROMPTS = 2;
+
 // ─── Twilio request validation middleware ────────────────────────────────────
 
+if (config.SKIP_TWILIO_SIGNATURE) {
+  logger.warn('SKIP_TWILIO_SIGNATURE is on — webhooks accept unsigned requests');
+}
+
 function validateTwilioSignature(req: Request, res: Response, next: () => void): void {
-  if (config.NODE_ENV === 'development') {
-    // Skip validation in dev (useful with ngrok)
+  // Explicit opt-out only (refused in production by config). Validation must
+  // not hinge on NODE_ENV: a deploy that forgets to set it would otherwise
+  // accept forged webhooks.
+  if (config.SKIP_TWILIO_SIGNATURE) {
     next();
     return;
   }
@@ -102,9 +111,8 @@ router.post('/gather', async (req: Request, res: Response) => {
   const body = req.body as TwilioGatherPayload;
   const callSid = (req.query['callSid'] as string) || body.CallSid;
   const speechResult = body.SpeechResult;
-  const noInput = req.query['noInput'] === 'true';
 
-  logger.info('Gather received', { callSid, speechResult, noInput });
+  logger.debug('Gather received', { callSid, speechResult });
 
   let state = conversationSvc.getSession(callSid);
 
@@ -120,19 +128,33 @@ router.post('/gather', async (req: Request, res: Response) => {
     void twilioSvc.startCallRecording(callSid);
   }
 
-  // Handle silence / no input
-  if (noInput || !speechResult) {
+  // Handle silence / no input. Without a limit a silent line (phone left off
+  // the hook) would loop until Twilio's 4-hour cap.
+  if (!speechResult) {
+    state.silentPrompts += 1;
+    if (state.silentPrompts > MAX_SILENT_PROMPTS) {
+      logger.info('Caller silent — ending call', { callSid });
+      closeCall(res, callSid, aiSvc.SILENCE_GOODBYE);
+      return;
+    }
     const prompt =
       state.turnCount < 2
         ? "Sorry, I didn't catch that — could you say it again for me?"
-        : "No rush — I'm still here whenever you're ready.";
+        : aiSvc.SILENCE_NUDGE;
 
     res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, prompt));
     return;
   }
+  state.silentPrompts = 0;
 
   // Log caller turn
   conversationSvc.addTurn(callSid, 'caller', speechResult);
+
+  if (Date.now() - state.startedAt.getTime() > config.MAX_CALL_DURATION_S * 1000) {
+    logger.info('Call reached max duration — wrapping up', { callSid });
+    closeCall(res, callSid, aiSvc.TIME_LIMIT_GOODBYE);
+    return;
+  }
 
   try {
     // Generate AI response
@@ -145,26 +167,15 @@ router.post('/gather', async (req: Request, res: Response) => {
 
     // Update step
     conversationSvc.advanceStep(callSid, nextStep);
-    conversationSvc.addTurn(callSid, 'assistant', response);
 
     // Check if call should close
     if (nextStep === 'closing') {
       logger.info('Conversation closing', { callSid });
-
-      const finalState = conversationSvc.destroySession(callSid);
-
-      // Process the call asynchronously (don't block the TwiML response)
-      if (finalState) {
-        setImmediate(() => {
-          callSvc
-            .processCompletedCall(finalState)
-            .catch((err) => logger.error('Post-call processing failed', { callSid, err }));
-        });
-      }
-
-      res.type('text/xml').send(twilioSvc.buildClosingTwiml(response));
+      closeCall(res, callSid, response);
       return;
     }
+
+    conversationSvc.addTurn(callSid, 'assistant', response);
 
     // Continue gathering
     res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, response));
@@ -212,29 +223,23 @@ router.post('/call-status', async (req: Request, res: Response) => {
   // Handle calls that ended unexpectedly (e.g., caller hung up mid-conversation).
   // destroySession() is the mutex: whichever handler destroys the session first
   // (this one, gather's closing branch, or the relay socket close) processes it.
-  const session = conversationSvc.getSession(callSid);
-  if (session && (callStatus === 'completed' || callStatus === 'failed')) {
+  if (conversationSvc.getSession(callSid) && (callStatus === 'completed' || callStatus === 'failed')) {
     logger.info('Call ended with active session — processing', { callSid, callStatus });
     const finalState = conversationSvc.destroySession(callSid);
-
-    if (finalState && finalState.turns.some((t) => t.role === 'caller')) {
-      setImmediate(() => {
-        callSvc
-          .processCompletedCall(
-            finalState,
-            undefined,
-            undefined,
-            CallDuration ? parseInt(CallDuration, 10) : undefined
-          )
-          .catch((err) => logger.error('Post-call processing failed', { callSid, err }));
-      });
-    } else if (finalState) {
-      // Caller never said anything — close the record without emailing
-      callSvc
-        .markCallCompleted(callSid)
-        .catch((err) => logger.error('Failed to close call record', { callSid, err }));
+    if (finalState) {
+      callSvc.finishCall(finalState, CallDuration ? parseInt(CallDuration, 10) : undefined);
     }
   }
 });
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Speaks a goodbye, hangs up, and hands the conversation to post-call processing. */
+function closeCall(res: Response, callSid: string, goodbye: string): void {
+  conversationSvc.addTurn(callSid, 'assistant', goodbye);
+  const finalState = conversationSvc.destroySession(callSid);
+  if (finalState) callSvc.finishCall(finalState);
+  res.type('text/xml').send(twilioSvc.buildClosingTwiml(goodbye));
+}
 
 export default router;

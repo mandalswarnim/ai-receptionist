@@ -8,6 +8,7 @@
  */
 
 import type { WebSocket } from 'ws';
+import { config } from '../config';
 import { logger } from '../lib/logger';
 import * as conversationSvc from './conversation.service';
 import * as aiSvc from './ai.service';
@@ -39,19 +40,93 @@ export function handleRelayConnection(ws: WebSocket): void {
   let promptEpoch = 0;
   // Cancels the in-flight LLM stream when a newer prompt supersedes it.
   let inflight: AbortController | undefined;
+
+  // Hang-up scheduled after a goodbye. 'goodbye' = the model ended the call,
+  // which the caller can cancel by talking over it ("wait, one more thing");
+  // 'limit' = silence / max duration, which they can't.
   let hangupTimer: NodeJS.Timeout | undefined;
+  let hangupReason: 'goodbye' | 'limit' | undefined;
+
+  // Silence handling: nudge once, then say goodbye.
+  let idleTimer: NodeJS.Timeout | undefined;
+  let idleNudged = false;
+  let maxDurationTimer: NodeJS.Timeout | undefined;
+
+  const say = (text: string) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ type: 'text', token: text, last: true }));
+    conversationSvc.addTurn(callSid, 'assistant', text);
+  };
+
+  const scheduleHangup = (ms: number, reason: 'goodbye' | 'limit') => {
+    clearIdle();
+    hangupReason = reason;
+    hangupTimer = setTimeout(() => void endCall(callSid), ms);
+    hangupTimer.unref();
+  };
+
+  const cancelHangup = () => {
+    if (hangupTimer) clearTimeout(hangupTimer);
+    hangupTimer = undefined;
+    hangupReason = undefined;
+  };
+
+  const clearIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
+
+  /** Starts the silence clock once `spoken` has (roughly) finished playing. */
+  const armIdle = (spoken = '') => {
+    clearIdle();
+    if (hangupTimer) return;
+    const delay = (spoken ? speechDurationMs(spoken) : 0) + config.SILENCE_TIMEOUT_S * 1000;
+    idleTimer = setTimeout(onIdle, delay);
+    idleTimer.unref();
+  };
+
+  const sayAndHangup = (text: string) => {
+    inflight?.abort();
+    promptEpoch++; // drop any reply still being generated
+    say(text);
+    scheduleHangup(speechDurationMs(text), 'limit');
+  };
+
+  const onIdle = () => {
+    if (hangupTimer) return;
+    if (!idleNudged) {
+      idleNudged = true;
+      say(aiSvc.SILENCE_NUDGE);
+      armIdle(aiSvc.SILENCE_NUDGE);
+      return;
+    }
+    logger.info('Relay: caller silent — ending call', { callSid });
+    sayAndHangup(aiSvc.SILENCE_GOODBYE);
+  };
+
+  /** Caller spoke or typed: they're here, stop the silence clock. */
+  const callerActive = () => {
+    clearIdle();
+    idleNudged = false;
+  };
+
+  const onReplyDone = (text: string, shouldEnd: boolean) => {
+    if (shouldEnd) {
+      logger.info('Relay: conversation complete, ending call', { callSid });
+      scheduleHangup(speechDurationMs(text), 'goodbye');
+    } else {
+      armIdle(text);
+    }
+  };
 
   const submitPrompt = (utterance: string) => {
     inflight?.abort();
     inflight = new AbortController();
-    void handlePrompt(ws, callSid, utterance, ++promptEpoch, () => promptEpoch, inflight, (ms) => {
-      hangupTimer = setTimeout(() => void endCall(callSid), ms);
-      hangupTimer.unref();
-    });
+    void handlePrompt(ws, callSid, utterance, ++promptEpoch, () => promptEpoch, inflight, onReplyDone);
   };
 
   const dtmf = new DtmfBuffer((digits) => {
-    logger.info('Relay: keypad input', { callSid, digits });
+    logger.info('Relay: keypad input', { callSid, digitCount: digits.length });
     submitPrompt(formatDtmfUtterance(digits));
   });
 
@@ -73,13 +148,22 @@ export function handleRelayConnection(ws: WebSocket): void {
         conversationSvc.createSession(callSid, from);
         // The welcomeGreeting in the TwiML is spoken by Twilio directly;
         // record it so the transcript is complete.
-        conversationSvc.addTurn(callSid, 'assistant', aiSvc.buildGreeting());
+        const greeting = aiSvc.buildGreeting();
+        conversationSvc.addTurn(callSid, 'assistant', greeting);
         conversationSvc.advanceStep(callSid, 'collect_name');
 
         callSvc
           .createInitialCallRecord(callSid, from)
           .catch((err) => logger.error('Relay: failed to create call record', { callSid, err }));
         void startCallRecording(callSid);
+
+        armIdle(greeting);
+        maxDurationTimer = setTimeout(() => {
+          if (hangupTimer) return;
+          logger.info('Relay: call reached max duration — wrapping up', { callSid });
+          sayAndHangup(aiSvc.TIME_LIMIT_GOODBYE);
+        }, config.MAX_CALL_DURATION_S * 1000);
+        maxDurationTimer.unref();
         break;
       }
 
@@ -87,6 +171,7 @@ export function handleRelayConnection(ws: WebSocket): void {
         if (!msg.last || !msg.voicePrompt) return;
         // Speech after the goodbye shouldn't reopen the conversation
         if (hangupTimer) return;
+        callerActive();
         dtmf.flush();
         submitPrompt(msg.voicePrompt);
         break;
@@ -94,6 +179,7 @@ export function handleRelayConnection(ws: WebSocket): void {
 
       case 'dtmf': {
         if (hangupTimer || !msg.digit) return;
+        callerActive();
         dtmf.push(msg.digit);
         break;
       }
@@ -107,6 +193,14 @@ export function handleRelayConnection(ws: WebSocket): void {
         if (lastTurn?.role === 'assistant' && msg.utteranceUntilInterrupt) {
           lastTurn.content = msg.utteranceUntilInterrupt;
         }
+        // Talking over the goodbye means they have more to say — stay on.
+        if (hangupReason === 'goodbye') {
+          logger.info('Relay: caller interrupted the goodbye — staying on the line', { callSid });
+          cancelHangup();
+        }
+        // Their prompt normally follows; if it never does (noise), the
+        // silence clock still ends a dead call.
+        armIdle();
         logger.debug('Relay: caller interrupted', { callSid });
         break;
       }
@@ -123,27 +217,16 @@ export function handleRelayConnection(ws: WebSocket): void {
   ws.on('close', () => {
     inflight?.abort();
     dtmf.dispose();
+    clearIdle();
     if (hangupTimer) clearTimeout(hangupTimer);
+    if (maxDurationTimer) clearTimeout(maxDurationTimer);
     if (!callSid) return;
     logger.info('Relay session closed', { callSid });
 
     const finalState = conversationSvc.destroySession(callSid);
     if (!finalState) return;
-
-    const hasCallerInput = finalState.turns.some((t) => t.role === 'caller');
-    if (hasCallerInput) {
-      const duration = Math.round((Date.now() - finalState.startedAt.getTime()) / 1000);
-      setImmediate(() => {
-        callSvc
-          .processCompletedCall(finalState, undefined, undefined, duration)
-          .catch((err) => logger.error('Relay: post-call processing failed', { callSid, err }));
-      });
-    } else {
-      // Caller hung up before saying anything — close out the record quietly.
-      callSvc
-        .markCallCompleted(callSid)
-        .catch((err) => logger.error('Relay: failed to close call record', { callSid, err }));
-    }
+    const duration = Math.round((Date.now() - finalState.startedAt.getTime()) / 1000);
+    callSvc.finishCall(finalState, duration);
   });
 
   ws.on('error', (err: Error) => {
@@ -158,7 +241,7 @@ async function handlePrompt(
   epoch: number,
   currentEpoch: () => number,
   abort: AbortController,
-  scheduleHangup: (ms: number) => void
+  onReplyDone: (text: string, endCall: boolean) => void
 ): Promise<void> {
   const state = conversationSvc.getSession(callSid);
   if (!state) {
@@ -167,7 +250,7 @@ async function handlePrompt(
   }
 
   conversationSvc.addTurn(callSid, 'caller', voicePrompt);
-  logger.info('Relay: caller said', { callSid, voicePrompt });
+  logger.debug('Relay: caller said', { callSid, voicePrompt });
 
   const live = () => currentEpoch() === epoch && ws.readyState === ws.OPEN;
   const startedAt = Date.now();
@@ -193,22 +276,15 @@ async function handlePrompt(
       ttfbMs: firstTokenAt ? firstTokenAt - startedAt : null,
       totalMs: Date.now() - startedAt,
     });
-
-    if (shouldEnd) {
-      logger.info('Relay: conversation complete, ending call', { callSid });
-      scheduleHangup(speechDurationMs(fullText));
-    }
+    onReplyDone(fullText, shouldEnd);
   } catch (err) {
     if (abort.signal.aborted) return; // superseded — expected
     logger.error('Relay: response generation failed', { callSid, err });
     if (live()) {
-      ws.send(
-        JSON.stringify({
-          type: 'text',
-          token: "Sorry, I lost you for a second there. Could you say that again?",
-          last: true,
-        })
-      );
+      const apology = "Sorry, I lost you for a second there. Could you say that again?";
+      ws.send(JSON.stringify({ type: 'text', token: apology, last: true }));
+      conversationSvc.addTurn(callSid, 'assistant', apology);
+      onReplyDone(apology, false);
     }
   }
 }

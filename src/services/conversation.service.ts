@@ -18,7 +18,7 @@ export function createSession(callSid: string, from: string): ConversationState 
     turnCount: 0,
     turns: [],
     startedAt: new Date(),
-    confirmed: false,
+    silentPrompts: 0,
   };
   activeSessions.set(callSid, state);
   logger.info('Conversation session created', { callSid, from });
@@ -27,14 +27,6 @@ export function createSession(callSid: string, from: string): ConversationState 
 
 export function getSession(callSid: string): ConversationState | undefined {
   return activeSessions.get(callSid);
-}
-
-export function updateSession(callSid: string, updates: Partial<ConversationState>): ConversationState {
-  const existing = activeSessions.get(callSid);
-  if (!existing) throw new Error(`No session found for callSid: ${callSid}`);
-  const updated = { ...existing, ...updates };
-  activeSessions.set(callSid, updated);
-  return updated;
 }
 
 export function addTurn(
@@ -46,21 +38,18 @@ export function addTurn(
   if (!session) return;
   session.turns.push({ role, content });
   session.turnCount += 1;
-  activeSessions.set(callSid, session);
 }
 
 export function updateCollectedInfo(callSid: string, info: Partial<CallerInfo>): void {
   const session = activeSessions.get(callSid);
   if (!session) return;
   session.collectedInfo = { ...session.collectedInfo, ...info };
-  activeSessions.set(callSid, session);
 }
 
 export function advanceStep(callSid: string, step: ConversationStep): void {
   const session = activeSessions.get(callSid);
   if (!session) return;
   session.step = step;
-  activeSessions.set(callSid, session);
   logger.debug('Conversation step advanced', { callSid, step });
 }
 
@@ -69,6 +58,27 @@ export function destroySession(callSid: string): ConversationState | undefined {
   activeSessions.delete(callSid);
   logger.info('Conversation session destroyed', { callSid });
   return session;
+}
+
+/** Removes and returns every session (used on shutdown). */
+export function destroyAllSessions(): ConversationState[] {
+  return [...activeSessions.keys()]
+    .map((callSid) => destroySession(callSid))
+    .filter((s): s is ConversationState => !!s);
+}
+
+/**
+ * Removes and returns sessions older than maxAgeMs. Normally every session is
+ * closed by a hangup, a socket close or the call-status webhook; this catches
+ * the ones whose closing event never arrived (e.g. no statusCallback set on
+ * the Twilio number) so they don't leak and their message still gets sent.
+ */
+export function destroyStaleSessions(maxAgeMs: number): ConversationState[] {
+  const cutoff = Date.now() - maxAgeMs;
+  return [...activeSessions.values()]
+    .filter((s) => s.startedAt.getTime() < cutoff)
+    .map((s) => destroySession(s.callSid))
+    .filter((s): s is ConversationState => !!s);
 }
 
 export function getActiveSessionCount(): number {
