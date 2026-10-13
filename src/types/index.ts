@@ -1,3 +1,5 @@
+import type { BusinessProfile } from '../services/business.service';
+
 export type UrgencyLevel = 'low' | 'medium' | 'high' | 'urgent';
 
 export interface CallerInfo {
@@ -24,6 +26,8 @@ export type ConversationStep =
 export interface ConversationState {
   callSid: string;
   from: string;
+  /** The business this call is answered for, fixed when the call starts. */
+  business: BusinessProfile;
   step: ConversationStep;
   collectedInfo: CallerInfo;
   turnCount: number;

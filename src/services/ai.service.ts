@@ -15,6 +15,7 @@ import { logger } from '../lib/logger';
 import { END_CALL_TOKEN, SentinelFilter } from '../lib/sentinel';
 import { normalizeUrgency, URGENCY_VALUES } from '../lib/urgency';
 import { isDialableNumber } from '../lib/phone';
+import type { BusinessProfile } from './business.service';
 
 export { END_CALL_TOKEN, normalizeUrgency };
 
@@ -35,29 +36,45 @@ const extractionClient = new OpenAI({
 
 // ─── System prompt ──────────────────────────────────────────────────────────
 
-function buildPersonaPrompt(callerNumber: string, keypadAvailable: boolean): string {
-  const keypadLine = keypadAvailable
-    ? `\n- Numbers are easy to mishear over the phone. When you ask for a phone number, offer the keypad: "or you can type it on your keypad and press hash". Text in [square brackets] from the caller is keypad input, not speech — treat it as exact.`
-    : '';
+/** What the receptionist knows about the business, or '' when nothing is set. */
+function knowledgeBlock(business: BusinessProfile): string {
+  const lines: string[] = [];
+  if (business.openingHours) lines.push(`- Opening hours: ${business.openingHours}`);
+  if (business.address) lines.push(`- Address: ${business.address}`);
+  if (business.bookingSystem) lines.push(`- Bookings are managed in: ${business.bookingSystem}`);
+  if (business.bookingInstructions) lines.push(`- Booking notes: ${business.bookingInstructions}`);
+  if (business.menuNotes) lines.push(`- Food and drink: ${business.menuNotes}`);
+  for (const faq of business.faqs) lines.push(`- Q: ${faq.q} A: ${faq.a}`);
+  if (lines.length === 0) return '';
+  return `\n\nWhat you know about ${business.name} (only state facts from this list; if asked anything else, say you'll get the team to come back to them):\n${lines.join('\n')}`;
+}
 
-  return `You are ${config.PERSONA_NAME}, the friendly receptionist who answers calls for ${config.COMPANY_NAME} when the team can't get to the phone. You're speaking on a live phone call and your words are read aloud by text-to-speech.
-
-How you speak:
+const HOW_YOU_SPEAK = `How you speak:
 - Sound like a real person on the phone: contractions, warm and relaxed, small acknowledgements ("Lovely, thanks James.", "Right, got it.", "Perfect.").
 - Keep it short — one or two sentences, under 30 words. Ask exactly ONE question per turn.
 - Vary your wording. Never use the same acknowledgement twice in a row, and never sound scripted.
 - Plain spoken words only: no emojis, no markdown, no lists, no stage directions, no headings.
 - Read phone numbers back digit by digit ("oh seven seven, one two three...") and spell emails out when confirming.
-- The caller's speech comes from speech recognition and may be slightly garbled — infer the most likely meaning from context rather than asking them to repeat unless it's a name, number, or email.${keypadLine}
+- The caller's speech comes from speech recognition and may be slightly garbled — infer the most likely meaning from context rather than asking them to repeat unless it's a name, number, or email.`;
+
+const WRAP_UP_RULE = `- Once you have the required details, confirm the key points in one short sentence and ask if there's anything else you can help with. Only say goodbye after they've said there's nothing else — if they add something, take it down and ask again.`;
+
+function phoneInstruction(callerNumber: string): string {
+  return isDialableNumber(callerNumber)
+    ? `They're calling from ${callerNumber} — just ask "is the number you're calling from the best one to reach you on?" instead of making them dictate one.`
+    : `Their caller ID is withheld, so you'll need to ask them for a number.`;
+}
+
+/** LIVE: takes a message for a business that missed the call. */
+function buildLivePrompt(business: BusinessProfile, callerNumber: string, keypadLine: string): string {
+  return `You are ${business.personaName}, the friendly receptionist who answers calls for ${business.name} when the team can't get to the phone. You're speaking on a live phone call and your words are read aloud by text-to-speech.${knowledgeBlock(business)}
+
+${HOW_YOU_SPEAK}${keypadLine}
 
 What you need before saying goodbye:
 1. Their name (required)
 2. Company (optional — ask once, drop it if they skip it)
-3. Best number to reach them (required). ${
-    isDialableNumber(callerNumber)
-      ? `They're calling from ${callerNumber} — just ask "is the number you're calling from the best one to reach you on?" instead of making them dictate one.`
-      : `Their caller ID is withheld, so you'll need to ask them for a number.`
-  }
+3. Best number to reach them (required). ${phoneInstruction(callerNumber)}
 4. Email (optional — ask once, confirm spelling if given)
 5. What the call is about (required — get enough detail to be useful)
 6. Whether it's urgent
@@ -66,7 +83,41 @@ Ground rules:
 - You are an AI assistant. If asked directly, say so briefly and cheerfully, then carry on. Never claim to be human.
 - Never promise response times — "someone will get back to you" is the line.
 - If the caller is rude, stay warm and steer back to taking the message.
-- Once you have the required details, confirm the key points in one short sentence and ask if there's anything else you can help with. Only say goodbye after they've said there's nothing else — if they add something, take it down and ask again.`;
+${WRAP_UP_RULE}`;
+}
+
+/**
+ * DEMO: answers as a prospect pub, so the owner hears exactly what their
+ * callers would get — bookings, questions about the place, and messages.
+ */
+function buildDemoPrompt(business: BusinessProfile, callerNumber: string, keypadLine: string): string {
+  return `You are ${business.personaName}, the AI assistant who answers the phone for ${business.name}. You're speaking on a live phone call and your words are read aloud by text-to-speech. Use British English.${knowledgeBlock(business)}
+
+${HOW_YOU_SPEAK}${keypadLine}
+
+What callers usually want, and how to handle it:
+- Booking a table: get their name, how many people, the date and the time, then the best number to reach them. ${phoneInstruction(callerNumber)} Read the booking back in one sentence and confirm it with "I've pencilled that in, the team will confirm by text." Never say a booking is guaranteed or check availability — you can't see the diary.
+- Questions about the place (hours, food, parking, dogs, events): answer from what you know above. If it isn't there, say you'll get the team to come back to them, and take their name and number.
+- Anything else: take a message with their name, best number, and what it's about.
+
+Ground rules:
+- You are an AI assistant. If asked directly, say so briefly and cheerfully, then carry on. Never claim to be human.
+- Never promise response times — "someone will get back to you" is the line.
+- If the caller is rude, stay warm and steer back to helping them.
+${WRAP_UP_RULE}`;
+}
+
+export function buildSystemPrompt(
+  business: BusinessProfile,
+  callerNumber: string,
+  keypadAvailable: boolean
+): string {
+  const keypadLine = keypadAvailable
+    ? `\n- Numbers are easy to mishear over the phone. When you ask for a phone number, offer the keypad: "or you can type it on your keypad and press hash". Text in [square brackets] from the caller is keypad input, not speech — treat it as exact.`
+    : '';
+  return business.mode === 'DEMO'
+    ? buildDemoPrompt(business, callerNumber, keypadLine)
+    : buildLivePrompt(business, callerNumber, keypadLine);
 }
 
 function historyMessages(state: ConversationState): OpenAI.Chat.ChatCompletionMessageParam[] {
@@ -137,7 +188,7 @@ export async function generateResponse(state: ConversationState): Promise<{
   extracted: Partial<ExtractedCallData>;
 }> {
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: 'system', content: buildPersonaPrompt(state.from, false) },
+    { role: 'system', content: buildSystemPrompt(state.business, state.from, false) },
     ...historyMessages(state),
   ];
 
@@ -251,7 +302,7 @@ export async function streamResponse(
     {
       role: 'system',
       content:
-        buildPersonaPrompt(state.from, true) +
+        buildSystemPrompt(state.business, state.from, true) +
         `\n\nReply with plain conversational text only. Only when the caller has confirmed there's nothing else and you have said goodbye, append the exact token ${END_CALL_TOKEN} at the very end of your reply.`,
     },
     ...historyMessages(state),
@@ -283,12 +334,33 @@ export async function streamResponse(
 
 // ─── Greeting ───────────────────────────────────────────────────────────────
 
-export function buildGreeting(): string {
+function partOfDay(now: Date): 'morning' | 'afternoon' | 'evening' {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', timeZone: config.COMPANY_TIMEZONE }).format(now)
+  );
+  return hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+}
+
+export function buildGreeting(business: BusinessProfile, now: Date = new Date()): string {
   const disclosure = config.RECORD_CALLS
     ? ' Just to let you know, this call may be recorded.'
     : '';
+
+  if (business.mode === 'DEMO') {
+    // Demo calls always say up front that it's an AI answering
+    if (business.greeting) {
+      const aiNote = /\bAI\b/i.test(business.greeting) ? '' : " You're speaking to an AI assistant.";
+      return `${business.greeting}${aiNote}${disclosure}`;
+    }
+    return (
+      `Good ${partOfDay(now)}, ${business.name}, you're speaking to ${business.personaName}, the AI assistant.${disclosure} ` +
+      `How can I help?`
+    );
+  }
+
+  if (business.greeting) return `${business.greeting}${disclosure}`;
   return (
-    `Hi, thanks for calling ${config.COMPANY_NAME}! This is ${config.PERSONA_NAME}.${disclosure} ` +
+    `Hi, thanks for calling ${business.name}! This is ${business.personaName}.${disclosure} ` +
     `The team can't get to the phone right now, but I can take a message — could I start with your name, please?`
   );
 }
@@ -311,11 +383,11 @@ export interface ExtractionInput {
   callerNumber?: string;
   /** Anything the live conversation already pinned down. */
   known?: Partial<ExtractedCallData>;
+  /** The business the call was for (names the receptionist in the prompt). */
+  business: BusinessProfile;
 }
 
-export async function extractStructuredData(input: ExtractionInput | string): Promise<ExtractedCallData> {
-  const params: ExtractionInput = typeof input === 'string' ? { liveTranscript: input } : input;
-
+export async function extractStructuredData(params: ExtractionInput): Promise<ExtractedCallData> {
   const sources = [
     `LIVE TRANSCRIPT (from real-time speech recognition, with speaker labels):\n${params.liveTranscript}`,
   ];
@@ -325,7 +397,7 @@ export async function extractStructuredData(input: ExtractionInput | string): Pr
     );
   }
 
-  const prompt = `You are a data extraction assistant. Extract structured information about the caller from a phone call between an AI receptionist (${config.PERSONA_NAME} at ${config.COMPANY_NAME}) and a caller.
+  const prompt = `You are a data extraction assistant. Extract structured information about the caller from a phone call between an AI receptionist (${params.business.personaName} at ${params.business.name}) and a caller.
 
 ${sources.join('\n\n')}
 
@@ -338,7 +410,7 @@ Rules:
 - If the caller confirmed the number they're calling from is the best one, use the caller ID above as the phone.
 - The transcripts come from speech recognition: normalise obvious mis-transcriptions ("at gmail dot com" → "@gmail.com", digits spoken as words → numerals, "oh" in a number → 0).
 - Do not invent details. Use an empty string for anything not provided.
-- "message": a concise account of what the caller wants (2-3 sentences max), in the third person.
+- "message": a concise account of what the caller wants (2-3 sentences max), in the third person. For a table booking, include the party size, date and time.
 - "summary": a 3-5 sentence professional summary suitable for email, covering who called, what they want, urgency, and any requested follow-up.
 - "urgency": one of low, medium, high, urgent — infer from context if not stated.`;
 

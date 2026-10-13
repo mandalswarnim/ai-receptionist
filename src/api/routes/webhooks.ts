@@ -29,6 +29,7 @@ import * as conversationSvc from '../../services/conversation.service';
 import * as aiSvc from '../../services/ai.service';
 import * as twilioSvc from '../../services/twilio.service';
 import * as callSvc from '../../services/call.service';
+import * as businessSvc from '../../services/business.service';
 
 const router = Router();
 
@@ -81,24 +82,25 @@ router.post('/incoming-call', async (req: Request, res: Response) => {
   logger.info('Forwarded call received — AI answering', { callSid, from });
 
   try {
-    const greeting = aiSvc.buildGreeting();
+    const business = await businessSvc.getDefaultBusiness();
+    const greeting = aiSvc.buildGreeting(business);
 
     if (config.USE_CONVERSATION_RELAY) {
       // Session setup happens when the WebSocket connects (relay.service.ts)
-      res.type('text/xml').send(twilioSvc.buildRelayTwiml(greeting));
+      res.type('text/xml').send(twilioSvc.buildRelayTwiml(greeting, business));
       return;
     }
 
     // Webhook mode: save record, start session, greet and listen
-    await callSvc.createInitialCallRecord(callSid, from);
+    await callSvc.createInitialCallRecord(callSid, from, business.id);
 
-    conversationSvc.createSession(callSid, from);
+    conversationSvc.createSession(callSid, from, business);
     conversationSvc.addTurn(callSid, 'assistant', greeting);
     conversationSvc.advanceStep(callSid, 'collect_name');
 
     void twilioSvc.startCallRecording(callSid);
 
-    res.type('text/xml').send(twilioSvc.buildGreetingTwiml(callSid, greeting));
+    res.type('text/xml').send(twilioSvc.buildGreetingTwiml(callSid, greeting, business));
   } catch (err) {
     logger.error('Error handling incoming call', { callSid, err });
     res.type('text/xml').send(twilioSvc.buildErrorTwiml());
@@ -120,11 +122,12 @@ router.post('/gather', async (req: Request, res: Response) => {
   if (!state) {
     logger.info('No session found — creating one for gather', { callSid });
     const from = body.From || 'unknown';
-    state = conversationSvc.createSession(callSid, from);
-    const greeting = aiSvc.buildGreeting();
+    const business = await businessSvc.getDefaultBusiness();
+    state = conversationSvc.createSession(callSid, from, business);
+    const greeting = aiSvc.buildGreeting(business);
     conversationSvc.addTurn(callSid, 'assistant', greeting);
     conversationSvc.advanceStep(callSid, 'collect_name');
-    await callSvc.createInitialCallRecord(callSid, from);
+    await callSvc.createInitialCallRecord(callSid, from, business.id);
     void twilioSvc.startCallRecording(callSid);
   }
 
@@ -142,7 +145,7 @@ router.post('/gather', async (req: Request, res: Response) => {
         ? "Sorry, I didn't catch that — could you say it again for me?"
         : aiSvc.SILENCE_NUDGE;
 
-    res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, prompt));
+    res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, prompt, state.business));
     return;
   }
   state.silentPrompts = 0;
@@ -178,12 +181,13 @@ router.post('/gather', async (req: Request, res: Response) => {
     conversationSvc.addTurn(callSid, 'assistant', response);
 
     // Continue gathering
-    res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, response));
+    res.type('text/xml').send(twilioSvc.buildGatherTwiml(callSid, response, state.business));
   } catch (err) {
     logger.error('Error in gather handler', { callSid, err });
     res.type('text/xml').send(twilioSvc.buildGatherTwiml(
       callSid,
-      "Sorry, I lost you for a second there. Could you say that again?"
+      "Sorry, I lost you for a second there. Could you say that again?",
+      state.business
     ));
   }
 });

@@ -5,14 +5,20 @@
 
 import { ConversationState, ConversationStep, CallerInfo } from '../types';
 import { logger } from '../lib/logger';
+import type { BusinessProfile } from './business.service';
 
 // In production you'd back this with Redis for multi-instance resilience.
 const activeSessions = new Map<string, ConversationState>();
 
-export function createSession(callSid: string, from: string): ConversationState {
+export function createSession(
+  callSid: string,
+  from: string,
+  business: BusinessProfile
+): ConversationState {
   const state: ConversationState = {
     callSid,
     from,
+    business,
     step: 'greeting',
     collectedInfo: {},
     turnCount: 0,
@@ -21,7 +27,7 @@ export function createSession(callSid: string, from: string): ConversationState 
     silentPrompts: 0,
   };
   activeSessions.set(callSid, state);
-  logger.info('Conversation session created', { callSid, from });
+  logger.info('Conversation session created', { callSid, from, business: business.slug });
   return state;
 }
 

@@ -49,16 +49,16 @@ one receptionist per prospect, switchable in seconds.
       so nothing changes for existing setups.
 
 ### 1.2 Business-aware prompts
-- [ ] Refactor `ai.service.ts` (`systemPrompt`, `buildGreeting`, extraction prompt),
+- [x] Refactor `ai.service.ts` (`systemPrompt`, `buildGreeting`, extraction prompt),
       `twilio.service.ts` (`speechHints`), `transcription.service.ts`, `email.service.ts`
       and `slack.service.ts` to take a `Business` instead of reading `config.COMPANY_NAME` etc.
-- [ ] Demo mode prompt: answers as the pub, uses its hours, menu notes, FAQs and booking
+- [x] Demo mode prompt: answers as the pub, uses its hours, menu notes, FAQs and booking
       system; for a booking request, collects name, party size, date and time and confirms it
       ("I've pencilled that in, the team will confirm by text"). Says it's an AI assistant in
       the greeting and whenever asked.
-- [ ] Demo calls never email the prospect. Summaries for DEMO businesses go to `BUSINESS_EMAIL`
+- [x] Demo calls never email the prospect. Summaries for DEMO businesses go to `BUSINESS_EMAIL`
       (Swarnim) with a "Demo call" subject prefix.
-- [ ] Tests: prompt builder snapshot tests for a LIVE and a DEMO business; existing tests still pass.
+- [x] Tests: prompt builder snapshot tests for a LIVE and a DEMO business; existing tests still pass.
 
 ### 1.3 Routing a call to the right business
 - [ ] Resolution order when a call arrives: (1) `To` number matches `Business.twilioNumber`

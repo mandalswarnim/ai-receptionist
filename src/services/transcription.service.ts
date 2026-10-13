@@ -9,11 +9,13 @@ import { toFile } from 'openai';
 import { config } from '../config';
 import { fetchRecordingBuffer } from './twilio.service';
 import { logger } from '../lib/logger';
+import type { BusinessProfile } from './business.service';
 
 const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
 export async function transcribeRecording(
   recordingUrl: string,
+  business: Pick<BusinessProfile, 'name' | 'personaName' | 'mode'>,
   contextHint?: string
 ): Promise<string> {
   logger.info('Starting transcription', { recordingUrl, model: config.WHISPER_MODEL });
@@ -26,8 +28,10 @@ export async function transcribeRecording(
     // A short context prompt biases the model toward the names and terms we
     // expect to hear, which noticeably improves accuracy on proper nouns.
     const prompt =
-      `Phone call between ${config.PERSONA_NAME}, the receptionist at ${config.COMPANY_NAME}, ` +
-      `and a caller leaving a message with their name, phone number, and email.` +
+      `Phone call between ${business.personaName}, the receptionist at ${business.name}, ` +
+      (business.mode === 'DEMO'
+        ? `and a caller booking a table, asking a question or leaving a message.`
+        : `and a caller leaving a message with their name, phone number, and email.`) +
       (contextHint ? ` ${contextHint}` : '');
 
     const transcription = await openai.audio.transcriptions.create({

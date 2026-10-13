@@ -14,6 +14,7 @@ import { config } from '../config';
 import { withRetry } from '../lib/retry';
 import { isDialableNumber } from '../lib/phone';
 import { ConversationState, ExtractedCallData } from '../types';
+import { BusinessProfile, profileForCall } from './business.service';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
 //
@@ -112,9 +113,9 @@ function toDbUrgency(urgency: string): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
   return normalizeUrgency(urgency).toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 }
 
-async function transcribeSafely(recordingUrl: string, contextHint?: string): Promise<string | undefined> {
+async function transcribeSafely(recordingUrl: string, business: BusinessProfile): Promise<string | undefined> {
   try {
-    const text = await transcribeRecording(recordingUrl, contextHint);
+    const text = await transcribeRecording(recordingUrl, business);
     return text.trim().length > 20 ? text : undefined;
   } catch {
     return undefined;
@@ -128,8 +129,13 @@ export function fallbackSummary(transcript: string): string {
   return `The automatic summary could not be generated for this call. Full transcript:\n\n${body}`;
 }
 
-function sendEmailWithRetry(data: ExtractedCallData, callSid: string, startedAt: Date): Promise<void> {
-  return withRetry(() => sendCallSummaryEmail(data, callSid, startedAt), {
+function sendEmailWithRetry(
+  data: ExtractedCallData,
+  callSid: string,
+  startedAt: Date,
+  business: BusinessProfile
+): Promise<void> {
+  return withRetry(() => sendCallSummaryEmail(data, callSid, startedAt, business), {
     attempts: 3,
     baseDelayMs: 2000,
     onRetry: (err, attempt) => logger.warn('Call summary email failed — retrying', { callSid, attempt, err }),
@@ -157,6 +163,7 @@ export async function resendPendingEmails(): Promise<void> {
     },
     orderBy: { endedAt: 'asc' },
     take: 20,
+    include: { business: true },
   });
   if (pending.length === 0) return;
 
@@ -172,7 +179,7 @@ export async function resendPendingEmails(): Promise<void> {
       summary: call.summary ?? '',
     };
     try {
-      await sendCallSummaryEmail(data, call.callSid, call.startedAt);
+      await sendCallSummaryEmail(data, call.callSid, call.startedAt, await profileForCall(call.business));
       await db.call.update({
         where: { id: call.id },
         data: { emailSent: true, emailSentAt: new Date() },
@@ -194,7 +201,7 @@ export async function processCompletedCall(
   recordingSid?: string,
   duration?: number
 ): Promise<void> {
-  const { callSid } = state;
+  const { callSid, business } = state;
   const startedProcessing = Date.now();
   logger.info('Processing completed call', { callSid, hasRecording: !!recordingUrl });
 
@@ -216,7 +223,7 @@ export async function processCompletedCall(
     }
 
     const liveTranscript = buildTurnsTranscript(state.turns);
-    const audioTranscript = recordingUrl ? await transcribeSafely(recordingUrl) : undefined;
+    const audioTranscript = recordingUrl ? await transcribeSafely(recordingUrl, business) : undefined;
 
     // 2. Extract structured data from both transcripts. If extraction fails
     //    (OpenAI outage, timeout...) the business still gets an email built
@@ -229,6 +236,7 @@ export async function processCompletedCall(
         audioTranscript,
         callerNumber: state.from,
         known: state.collectedInfo,
+        business,
       });
     } catch (err) {
       extractionFailed = true;
@@ -277,6 +285,7 @@ export async function processCompletedCall(
           callSid,
           from: state.from,
           to: config.TWILIO_PHONE_NUMBER,
+          businessId: business.id,
           startedAt: state.startedAt,
           ...callFields,
           turns: { create: turns },
@@ -295,11 +304,11 @@ export async function processCompletedCall(
 
     // 4. Notify — email is the deliverable; Slack/SMS run alongside it
     const [emailResult] = await Promise.allSettled([
-      sendEmailWithRetry(finalData, callSid, state.startedAt),
-      sendSlackNotification(finalData, callSid, state.startedAt).catch((err) =>
+      sendEmailWithRetry(finalData, callSid, state.startedAt, business),
+      sendSlackNotification(finalData, callSid, state.startedAt, business).catch((err) =>
         logger.error('Slack notification error', { err })
       ),
-      finalData.urgency === 'urgent' && config.ALERT_SMS_NUMBER
+      finalData.urgency === 'urgent' && config.ALERT_SMS_NUMBER && business.mode === 'LIVE'
         ? sendUrgentSms(config.ALERT_SMS_NUMBER, finalData.name || 'Unknown', finalData.message).catch(
             (err) => logger.error('Urgent SMS error', { err })
           )
@@ -340,6 +349,7 @@ export async function processCompletedCall(
           callSid,
           from: state.from,
           to: config.TWILIO_PHONE_NUMBER,
+          businessId: state.business.id,
           status: 'FAILED',
           startedAt: state.startedAt,
           endedAt: new Date(),
@@ -357,7 +367,8 @@ export async function processCompletedCall(
 
 export async function createInitialCallRecord(
   callSid: string,
-  from: string
+  from: string,
+  businessId: string | null
 ): Promise<void> {
   await db.call.upsert({
     where: { callSid },
@@ -365,9 +376,10 @@ export async function createInitialCallRecord(
       callSid,
       from,
       to: config.TWILIO_PHONE_NUMBER,
+      businessId,
       status: 'IN_PROGRESS',
     },
-    update: { status: 'IN_PROGRESS' },
+    update: { status: 'IN_PROGRESS', businessId },
   });
 }
 
@@ -406,7 +418,10 @@ export async function enhanceCallWithRecording(
   recordingSid: string,
   duration: number
 ): Promise<void> {
-  const call = await db.call.findUnique({ where: { callSid }, include: { turns: { orderBy: { sequence: 'asc' } } } });
+  const call = await db.call.findUnique({
+    where: { callSid },
+    include: { turns: { orderBy: { sequence: 'asc' } }, business: true },
+  });
   if (!call) {
     logger.warn('Recording ready for unknown call', { callSid });
     return;
@@ -421,8 +436,9 @@ export async function enhanceCallWithRecording(
   if (call.status === 'IN_PROGRESS') return;
 
   try {
+    const business = await profileForCall(call.business);
     const contextHint = call.callerName ? `The caller's name is ${call.callerName}.` : undefined;
-    const transcript = await transcribeRecording(recordingUrl, contextHint);
+    const transcript = await transcribeRecording(recordingUrl, business, contextHint);
     if (transcript.length < 20) return;
 
     const updates: Record<string, unknown> = { transcript };
@@ -436,6 +452,7 @@ export async function enhanceCallWithRecording(
         ),
         audioTranscript: transcript,
         callerNumber: call.from,
+        business,
       });
       if (!call.callerName && extracted.name) updates['callerName'] = extracted.name;
       if (!call.callerCompany && extracted.company) updates['callerCompany'] = extracted.company;

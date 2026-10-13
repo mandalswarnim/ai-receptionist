@@ -13,6 +13,7 @@ import { logger } from '../lib/logger';
 import * as conversationSvc from './conversation.service';
 import * as aiSvc from './ai.service';
 import * as callSvc from './call.service';
+import * as businessSvc from './business.service';
 import { startCallRecording, endCall } from './twilio.service';
 import { DtmfBuffer, formatDtmfUtterance } from '../lib/dtmf';
 
@@ -51,6 +52,9 @@ export function handleRelayConnection(ws: WebSocket): void {
   let promptEpoch = 0;
   // Cancels the in-flight LLM stream when a newer prompt supersedes it.
   let inflight: AbortController | undefined;
+  // Resolves once the session exists (the business is loaded at setup), so
+  // a prompt arriving straight after setup is never dropped.
+  let sessionReady: Promise<void> = Promise.resolve();
 
   // Hang-up scheduled after a goodbye. 'goodbye' = the model ended the call,
   // which the caller can cancel by talking over it ("wait, one more thing");
@@ -132,8 +136,30 @@ export function handleRelayConnection(ws: WebSocket): void {
 
   const submitPrompt = (utterance: string) => {
     inflight?.abort();
-    inflight = new AbortController();
-    void handlePrompt(ws, callSid, utterance, ++promptEpoch, () => promptEpoch, inflight, onReplyDone);
+    const abort = (inflight = new AbortController());
+    const epoch = ++promptEpoch;
+    void sessionReady.then(() =>
+      handlePrompt(ws, callSid, utterance, epoch, () => promptEpoch, abort, onReplyDone)
+    );
+  };
+
+  const startSession = async (from: string) => {
+    const business = await businessSvc.getDefaultBusiness();
+    // Caller hung up while we loaded: nothing to set up, nothing to process
+    if (ws.readyState !== ws.OPEN) return;
+    conversationSvc.createSession(callSid, from, business);
+    // The welcomeGreeting in the TwiML is spoken by Twilio directly;
+    // record it so the transcript is complete.
+    const greeting = aiSvc.buildGreeting(business);
+    conversationSvc.addTurn(callSid, 'assistant', greeting);
+    conversationSvc.advanceStep(callSid, 'collect_name');
+
+    callSvc
+      .createInitialCallRecord(callSid, from, business.id)
+      .catch((err) => logger.error('Relay: failed to create call record', { callSid, err }));
+
+    // A prompt may already have reset the silence clock while we loaded
+    if (!idleTimer && !hangupTimer && promptEpoch === 0) armIdle(greeting);
   };
 
   const dtmf = new DtmfBuffer((digits) => {
@@ -156,19 +182,11 @@ export function handleRelayConnection(ws: WebSocket): void {
         const from = msg.from ?? 'unknown';
         logger.info('Relay session started', { callSid, from });
 
-        conversationSvc.createSession(callSid, from);
-        // The welcomeGreeting in the TwiML is spoken by Twilio directly;
-        // record it so the transcript is complete.
-        const greeting = aiSvc.buildGreeting();
-        conversationSvc.addTurn(callSid, 'assistant', greeting);
-        conversationSvc.advanceStep(callSid, 'collect_name');
-
-        callSvc
-          .createInitialCallRecord(callSid, from)
-          .catch((err) => logger.error('Relay: failed to create call record', { callSid, err }));
+        sessionReady = startSession(from).catch((err) => {
+          logger.error('Relay: failed to start session', { callSid, err });
+        });
         void startCallRecording(callSid);
 
-        armIdle(greeting);
         maxDurationTimer = setTimeout(() => {
           if (hangupTimer) return;
           logger.info('Relay: call reached max duration — wrapping up', { callSid });

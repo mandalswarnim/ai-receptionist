@@ -11,9 +11,12 @@ import * as aiSvc from '../src/services/ai.service';
 import { buildTurnsTranscript } from '../src/services/transcription.service';
 import { extractStructuredData } from '../src/services/ai.service';
 import { sendCallSummaryEmail } from '../src/services/email.service';
+import { envFallbackProfile } from '../src/services/business.service';
 
 const FAKE_CALL_SID = 'CA_TEST_' + Date.now();
 const FAKE_FROM = '+14155551234';
+// The default business from env, so the script needs no database
+const business = envFallbackProfile();
 
 async function simulateConversation(): Promise<void> {
   console.log('\n═══════════════════════════════════════════════');
@@ -21,8 +24,8 @@ async function simulateConversation(): Promise<void> {
   console.log('═══════════════════════════════════════════════\n');
 
   // 1. Create session
-  conversationSvc.createSession(FAKE_CALL_SID, FAKE_FROM);
-  const greeting = aiSvc.buildGreeting();
+  conversationSvc.createSession(FAKE_CALL_SID, FAKE_FROM, business);
+  const greeting = aiSvc.buildGreeting(business);
   conversationSvc.addTurn(FAKE_CALL_SID, 'assistant', greeting);
   conversationSvc.advanceStep(FAKE_CALL_SID, 'collect_name');
 
@@ -79,13 +82,13 @@ async function simulateConversation(): Promise<void> {
   console.log('\n═══════════════════════════════════════════════');
   console.log('  EXTRACTED DATA');
   console.log('═══════════════════════════════════════════════');
-  const extracted = await extractStructuredData(transcript);
+  const extracted = await extractStructuredData({ liveTranscript: transcript, callerNumber: FAKE_FROM, business });
   console.log(JSON.stringify(extracted, null, 2));
 
   // 5. Send the summary email to BUSINESS_EMAIL (opt-in: it's a real send)
   if (process.argv.includes('--send-email')) {
     console.log('\n Sending test email...');
-    await sendCallSummaryEmail(extracted, FAKE_CALL_SID, finalState.startedAt);
+    await sendCallSummaryEmail(extracted, FAKE_CALL_SID, finalState.startedAt, business);
     console.log(' Email sent!');
   }
 

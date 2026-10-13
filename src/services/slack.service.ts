@@ -5,6 +5,7 @@
 import { config } from '../config';
 import { ExtractedCallData } from '../types';
 import { logger } from '../lib/logger';
+import type { BusinessProfile } from './business.service';
 
 /**
  * Escapes caller-derived text for Slack mrkdwn. Without it a caller whose
@@ -27,9 +28,12 @@ function urgencyEmoji(urgency: string): string {
 export async function sendSlackNotification(
   data: ExtractedCallData,
   callSid: string,
-  timestamp: Date
+  timestamp: Date,
+  business: Pick<BusinessProfile, 'name' | 'mode'>
 ): Promise<void> {
   if (!config.SLACK_WEBHOOK_URL) return;
+
+  const demo = business.mode === 'DEMO';
 
   // Header is plain_text (rendered literally); everything mrkdwn is escaped.
   const name = escapeSlack(data.name);
@@ -38,13 +42,13 @@ export async function sendSlackNotification(
   const email = escapeSlack(data.email);
 
   const payload = {
-    text: `*New Missed Call* ${urgencyEmoji(data.urgency)} ${data.urgency.toUpperCase()}`,
+    text: `*${demo ? 'Demo Call' : 'New Missed Call'}* ${urgencyEmoji(data.urgency)} ${data.urgency.toUpperCase()}`,
     blocks: [
       {
         type: 'header',
         text: {
           type: 'plain_text',
-          text: `📞 Missed Call from ${data.name || 'Unknown'}`,
+          text: `${demo ? '🎭 Demo call' : '📞 Missed Call'} from ${data.name || 'Unknown'}`,
         },
       },
       {
@@ -74,7 +78,7 @@ export async function sendSlackNotification(
       },
       {
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `Call ID: ${callSid}` }],
+        elements: [{ type: 'mrkdwn', text: `${escapeSlack(business.name)} • Call ID: ${callSid}` }],
       },
     ],
   };

@@ -6,6 +6,7 @@ import twilio from 'twilio';
 import VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
 import { config, wsBaseUrl, relayAuthToken } from '../config';
 import { logger } from '../lib/logger';
+import type { BusinessProfile } from './business.service';
 
 export const twilioClient = twilio(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN);
 
@@ -16,11 +17,13 @@ const SAY_ATTRS = {
   language: config.TTS_LANGUAGE as never,
 };
 
+type HintSource = Pick<BusinessProfile, 'name' | 'personaName'>;
+
 /** Vocabulary hints improve live speech recognition of expected words. */
-function speechHints(): string {
+export function speechHints(business?: HintSource): string {
   const base = [
-    config.COMPANY_NAME,
-    config.PERSONA_NAME,
+    business?.name ?? '',
+    business?.personaName ?? '',
     'yes',
     'no',
     'urgent',
@@ -37,13 +40,13 @@ function speechHints(): string {
     .join(',');
 }
 
-function addGather(twiml: VoiceResponse, callSid: string, message: string): void {
+function addGather(twiml: VoiceResponse, callSid: string, message: string, business?: HintSource): void {
   const gather = twiml.gather({
     input: ['speech'],
     speechTimeout: config.SPEECH_TIMEOUT,
     speechModel: config.SPEECH_MODEL,
     language: config.TTS_LANGUAGE as never,
-    hints: speechHints(),
+    hints: speechHints(business),
     profanityFilter: false,
     action: `${config.BASE_URL}/api/webhooks/gather?callSid=${callSid}`,
     method: 'POST',
@@ -63,18 +66,18 @@ function addGather(twiml: VoiceResponse, callSid: string, message: string): void
  * Greeting TwiML: the AI says hello while already listening, so callers can
  * interrupt and speech during the greeting is captured.
  */
-export function buildGreetingTwiml(callSid: string, greeting: string): string {
+export function buildGreetingTwiml(callSid: string, greeting: string, business: HintSource): string {
   const twiml = new VoiceResponse();
-  addGather(twiml, callSid, greeting);
+  addGather(twiml, callSid, greeting, business);
   return twiml.toString();
 }
 
 /**
  * Gather TwiML: AI speaks a response and listens for the next caller input.
  */
-export function buildGatherTwiml(callSid: string, message: string): string {
+export function buildGatherTwiml(callSid: string, message: string, business?: HintSource): string {
   const twiml = new VoiceResponse();
-  addGather(twiml, callSid, message);
+  addGather(twiml, callSid, message, business);
   return twiml.toString();
 }
 
@@ -108,7 +111,7 @@ export function buildErrorTwiml(): string {
  * text and speaks whatever text we send back (ElevenLabs TTS + Deepgram STT),
  * with barge-in handled natively.
  */
-export function buildRelayTwiml(greeting: string): string {
+export function buildRelayTwiml(greeting: string, business: HintSource): string {
   const twiml = new VoiceResponse();
   twiml.connect().conversationRelay({
     url: `${wsBaseUrl}/api/relay?token=${relayAuthToken}`,
@@ -121,8 +124,8 @@ export function buildRelayTwiml(greeting: string): string {
     transcriptionLanguage: config.TTS_LANGUAGE,
     ttsLanguage: config.TTS_LANGUAGE,
     interruptible: 'speech',
-    // Bias STT toward the words we expect (company, persona, "at gmail dot com")
-    hints: speechHints(),
+    // Bias STT toward the words we expect (business, persona, "at gmail dot com")
+    hints: speechHints(business),
     // Lets callers type their phone number instead of dictating it
     dtmfDetection: true,
     // Reads "07700 900123" and "james@acme.co.uk" naturally instead of

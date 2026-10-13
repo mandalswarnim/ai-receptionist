@@ -7,6 +7,9 @@ import { config } from '../config';
 import { ExtractedCallData } from '../types';
 import { logger } from '../lib/logger';
 import { escapeHtml } from '../lib/html';
+import type { BusinessProfile } from './business.service';
+
+type EmailBusiness = Pick<BusinessProfile, 'name' | 'mode' | 'notifyEmail'>;
 
 const smtpPort = parseInt(config.SMTP_PORT, 10);
 
@@ -45,7 +48,12 @@ function urgencyBadge(urgency: string): string {
   return badges[urgency] ?? '⚪ Unknown';
 }
 
-function buildHtmlEmail(raw: ExtractedCallData, callSid: string, timestamp: Date): string {
+function buildHtmlEmail(
+  raw: ExtractedCallData,
+  callSid: string,
+  timestamp: Date,
+  business: EmailBusiness
+): string {
   const data: ExtractedCallData = {
     ...raw,
     name: escapeHtml(raw.name),
@@ -87,7 +95,7 @@ function buildHtmlEmail(raw: ExtractedCallData, callSid: string, timestamp: Date
 <body>
   <div class="container">
     <div class="header">
-      <h1>New Missed Call Message</h1>
+      <h1>${business.mode === 'DEMO' ? `Demo call — ${escapeHtml(business.name)}` : 'New Missed Call Message'}</h1>
       <p>${formatTimestamp(timestamp)} &bull; Call ID: ${callSid}</p>
     </div>
     <div class="body">
@@ -124,16 +132,21 @@ function buildHtmlEmail(raw: ExtractedCallData, callSid: string, timestamp: Date
       </div>
     </div>
     <div class="footer">
-      Sent by the ${config.COMPANY_NAME} AI Receptionist &bull; ${formatTimestamp(timestamp)}
+      Sent by the ${escapeHtml(business.name)} AI Receptionist &bull; ${formatTimestamp(timestamp)}
     </div>
   </div>
 </body>
 </html>`;
 }
 
-function buildTextEmail(data: ExtractedCallData, callSid: string, timestamp: Date): string {
+function buildTextEmail(
+  data: ExtractedCallData,
+  callSid: string,
+  timestamp: Date,
+  business: EmailBusiness
+): string {
   return `
-NEW MISSED CALL MESSAGE — ${config.COMPANY_NAME}
+${business.mode === 'DEMO' ? 'DEMO CALL' : 'NEW MISSED CALL MESSAGE'} — ${business.name}
 ================================================
 Received: ${formatTimestamp(timestamp)}
 Call ID:  ${callSid}
@@ -155,31 +168,47 @@ AI SUMMARY
 ${data.summary}
 
 ---
-Sent by the ${config.COMPANY_NAME} AI Receptionist
+Sent by the ${business.name} AI Receptionist
 `.trim();
+}
+
+/**
+ * Where a call summary goes. Demo calls never reach the prospect: they go to
+ * BUSINESS_EMAIL (us), as does any business without its own address.
+ */
+export function summaryRecipient(business: EmailBusiness): string {
+  if (business.mode === 'DEMO') return config.BUSINESS_EMAIL;
+  return business.notifyEmail || config.BUSINESS_EMAIL;
+}
+
+export function summarySubject(data: ExtractedCallData, business: EmailBusiness): string {
+  const callerDisplay = data.name || data.phone || 'Unknown Caller';
+  const urgencyTag = data.urgency === 'urgent' ? '🔴 URGENT — ' : data.urgency === 'high' ? '🟠 ' : '';
+  if (business.mode === 'DEMO') return `Demo call: ${business.name} — ${urgencyTag}${callerDisplay}`;
+  return `${urgencyTag}New Missed Call Message from ${callerDisplay}`;
 }
 
 export async function sendCallSummaryEmail(
   data: ExtractedCallData,
   callSid: string,
-  timestamp: Date
+  timestamp: Date,
+  business: EmailBusiness
 ): Promise<void> {
-  const callerDisplay = data.name || data.phone || 'Unknown Caller';
-  const urgencyTag = data.urgency === 'urgent' ? '🔴 URGENT — ' : data.urgency === 'high' ? '🟠 ' : '';
-  const subject = `${urgencyTag}New Missed Call Message from ${callerDisplay}`;
+  const to = summaryRecipient(business);
 
   await transporter.sendMail({
     from: `"${config.EMAIL_FROM_NAME}" <${config.SMTP_USER}>`,
-    to: config.BUSINESS_EMAIL,
-    subject,
-    text: buildTextEmail(data, callSid, timestamp),
-    html: buildHtmlEmail(data, callSid, timestamp),
+    to,
+    subject: summarySubject(data, business),
+    text: buildTextEmail(data, callSid, timestamp, business),
+    html: buildHtmlEmail(data, callSid, timestamp, business),
   });
 
   logger.info('Call summary email sent', {
     from: config.SMTP_USER,
-    to: config.BUSINESS_EMAIL,
+    to,
     callSid,
-    caller: callerDisplay,
+    caller: data.name || data.phone || 'Unknown Caller',
+    demo: business.mode === 'DEMO',
   });
 }

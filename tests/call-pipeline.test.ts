@@ -1,5 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ConversationState } from '../src/types';
+import type { BusinessProfile } from '../src/services/business.service';
+
+const LIVE_BUSINESS: BusinessProfile = {
+  id: 'biz-default',
+  slug: 'default',
+  name: 'Acme',
+  mode: 'LIVE',
+  personaName: 'Maya',
+  greeting: null,
+  openingHours: null,
+  address: null,
+  bookingSystem: null,
+  bookingInstructions: null,
+  menuNotes: null,
+  faqs: [],
+  notifyEmail: 'owner@acme.test',
+};
 
 const mocks = vi.hoisted(() => ({
   upsert: vi.fn(),
@@ -55,6 +72,10 @@ vi.mock('../src/services/ai.service', async () => ({
 vi.mock('../src/services/email.service', () => ({ sendCallSummaryEmail: mocks.sendEmail }));
 vi.mock('../src/services/slack.service', () => ({ sendSlackNotification: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../src/services/twilio.service', () => ({ sendUrgentSms: vi.fn() }));
+// A stored business stands in for its own profile; older calls get the default
+vi.mock('../src/services/business.service', () => ({
+  profileForCall: async (business: BusinessProfile | null) => business ?? LIVE_BUSINESS,
+}));
 
 import {
   processCompletedCall,
@@ -69,6 +90,7 @@ function state(): ConversationState {
   return {
     callSid: 'CA123',
     from: '+447700900123',
+    business: LIVE_BUSINESS,
     step: 'closing',
     collectedInfo: {},
     turnCount: 2,
@@ -150,6 +172,15 @@ describe('processCompletedCall', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
+  it('links the call to its business and emails for that business', async () => {
+    const demo = { ...LIVE_BUSINESS, id: 'biz-crown', name: 'The Crown', mode: 'DEMO' as const };
+
+    await processCompletedCall({ ...state(), business: demo });
+
+    expect(mocks.upsert.mock.calls[0][0].create.businessId).toBe('biz-crown');
+    expect(mocks.sendEmail.mock.calls[0][3]).toBe(demo);
+  });
+
   it('still sends the email when saving the call fails', async () => {
     mocks.upsert.mockRejectedValue(new Error('db down'));
 
@@ -173,6 +204,7 @@ describe('resendPendingEmails', () => {
     message: 'About an invoice.',
     urgency: 'HIGH',
     summary: 'James called about an invoice.',
+    business: null,
   };
 
   it('resends unsent emails and marks them sent', async () => {
@@ -183,6 +215,7 @@ describe('resendPendingEmails', () => {
     const where = mocks.findMany.mock.calls[0][0].where;
     expect(where).toMatchObject({ status: 'COMPLETED', emailSent: false, summary: { not: null } });
     expect(mocks.sendEmail.mock.calls[0][0]).toMatchObject({ name: 'James', urgency: 'high' });
+    expect(mocks.sendEmail.mock.calls[0][3]).toBe(LIVE_BUSINESS);
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'call-1' },
       data: expect.objectContaining({ emailSent: true }),

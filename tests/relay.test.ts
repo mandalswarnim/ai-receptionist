@@ -24,6 +24,9 @@ vi.mock('../src/services/call.service', () => ({
   createInitialCallRecord: vi.fn().mockResolvedValue(undefined),
   finishCall: mocks.finishCall,
 }));
+vi.mock('../src/services/business.service', () => ({
+  getDefaultBusiness: vi.fn().mockResolvedValue({ id: 'biz-default', slug: 'default', mode: 'LIVE' }),
+}));
 vi.mock('../src/services/twilio.service', () => ({
   startCallRecording: vi.fn().mockResolvedValue(undefined),
   endCall: mocks.endCall,
