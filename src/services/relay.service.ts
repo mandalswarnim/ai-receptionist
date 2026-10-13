@@ -28,9 +28,20 @@ interface RelayMessage {
   description?: string;
 }
 
-/** Rough TTS pacing used to wait for the goodbye to finish before hanging up. */
+/** Rough TTS pacing used to wait for speech to finish playing. */
 export function speechDurationMs(text: string): number {
   return Math.min(Math.max((text.length / 15) * 1000, 2000), 10_000);
+}
+
+/** Pause left after the goodbye so the caller can still add something. */
+const GOODBYE_GRACE_MS = 4_000;
+
+/**
+ * How long to wait after the goodbye before hanging up. Uncapped, so a long
+ * recap is never cut off mid-sentence, plus a grace pause for the caller.
+ */
+export function goodbyeHangupDelayMs(text: string): number {
+  return Math.max((text.length / 15) * 1000, 2000) + GOODBYE_GRACE_MS;
 }
 
 export function handleRelayConnection(ws: WebSocket): void {
@@ -113,7 +124,7 @@ export function handleRelayConnection(ws: WebSocket): void {
   const onReplyDone = (text: string, shouldEnd: boolean) => {
     if (shouldEnd) {
       logger.info('Relay: conversation complete, ending call', { callSid });
-      scheduleHangup(speechDurationMs(text), 'goodbye');
+      scheduleHangup(goodbyeHangupDelayMs(text), 'goodbye');
     } else {
       armIdle(text);
     }
@@ -169,8 +180,13 @@ export function handleRelayConnection(ws: WebSocket): void {
 
       case 'prompt': {
         if (!msg.last || !msg.voicePrompt) return;
-        // Speech after the goodbye shouldn't reopen the conversation
-        if (hangupTimer) return;
+        // Speaking after a forced wrap-up (silence / time limit) is ignored,
+        // but speaking after a normal goodbye means they have more to say.
+        if (hangupReason === 'limit') return;
+        if (hangupReason === 'goodbye') {
+          logger.info('Relay: caller spoke after the goodbye — staying on the line', { callSid });
+          cancelHangup();
+        }
         callerActive();
         dtmf.flush();
         submitPrompt(msg.voicePrompt);

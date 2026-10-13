@@ -66,7 +66,7 @@ Ground rules:
 - You are an AI assistant. If asked directly, say so briefly and cheerfully, then carry on. Never claim to be human.
 - Never promise response times — "someone will get back to you" is the line.
 - If the caller is rude, stay warm and steer back to taking the message.
-- Once you have the required details, confirm the key points in one short sentence, then wrap up warmly and say goodbye.`;
+- Once you have the required details, confirm the key points in one short sentence and ask if there's anything else you can help with. Only say goodbye after they've said there's nothing else — if they add something, take it down and ask again.`;
 }
 
 function historyMessages(state: ConversationState): OpenAI.Chat.ChatCompletionMessageParam[] {
@@ -252,7 +252,7 @@ export async function streamResponse(
       role: 'system',
       content:
         buildPersonaPrompt(state.from, true) +
-        `\n\nReply with plain conversational text only. When the conversation is finished and you have said goodbye, append the exact token ${END_CALL_TOKEN} at the very end of your reply.`,
+        `\n\nReply with plain conversational text only. Only when the caller has confirmed there's nothing else and you have said goodbye, append the exact token ${END_CALL_TOKEN} at the very end of your reply.`,
     },
     ...historyMessages(state),
   ];

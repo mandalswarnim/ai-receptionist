@@ -29,7 +29,11 @@ vi.mock('../src/services/twilio.service', () => ({
   endCall: mocks.endCall,
 }));
 
-import { handleRelayConnection, speechDurationMs } from '../src/services/relay.service';
+import {
+  goodbyeHangupDelayMs,
+  handleRelayConnection,
+  speechDurationMs,
+} from '../src/services/relay.service';
 import * as conversationSvc from '../src/services/conversation.service';
 
 const CALL_SID = 'CA_RELAY';
@@ -115,18 +119,35 @@ describe('relay conversation', () => {
     await say(ws, "That's everything");
     expect(mocks.endCall).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(speechDurationMs(goodbye));
+    await vi.advanceTimersByTimeAsync(goodbyeHangupDelayMs(goodbye) - 1);
+    expect(mocks.endCall).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(mocks.endCall).toHaveBeenCalledWith(CALL_SID);
   });
 
-  it('ignores speech after the goodbye', async () => {
+  it('does not cut off a long goodbye', async () => {
+    const ws = await connect();
+    const goodbye =
+      "Perfect, so that's a booking for twenty people on October the twentieth at seven pm, " +
+      "under Kusum, and I'll send it to kusum one two three at gmail dot com. Thanks so much, bye!";
+    reply(goodbye, true);
+    await say(ws, "No, that's everything");
+
+    await vi.advanceTimersByTimeAsync(speechDurationMs(goodbye));
+    expect(mocks.endCall).not.toHaveBeenCalled();
+  });
+
+  it('stays on the line when the caller speaks after the goodbye', async () => {
     const ws = await connect();
     reply('Bye!', true);
     await say(ws, "That's all");
 
-    await say(ws, 'thanks');
+    reply('Sure, what else can I note down?');
+    await say(ws, 'Oh, one more thing');
+    await vi.advanceTimersByTimeAsync(goodbyeHangupDelayMs('Bye!'));
 
-    expect(mocks.streamResponse).toHaveBeenCalledTimes(1);
+    expect(mocks.streamResponse).toHaveBeenCalledTimes(2);
+    expect(mocks.endCall).not.toHaveBeenCalled();
   });
 
   it('stays on the line when the caller talks over the goodbye', async () => {
@@ -137,7 +158,7 @@ describe('relay conversation', () => {
     ws.receive({ type: 'interrupt', utteranceUntilInterrupt: 'Thanks,' });
     reply('Of course — what else?');
     await say(ws, 'Wait, one more thing');
-    await vi.advanceTimersByTimeAsync(speechDurationMs('Thanks, bye now!'));
+    await vi.advanceTimersByTimeAsync(goodbyeHangupDelayMs('Thanks, bye now!'));
 
     expect(mocks.endCall).not.toHaveBeenCalled();
     expect(ws.spoken().at(-1)).toBe('Of course — what else?');
@@ -166,6 +187,10 @@ describe('relay conversation', () => {
 
     await vi.advanceTimersByTimeAsync(speechDurationMs('Are you still there?') + 10_000);
     expect(ws.spoken().at(-1)).toBe('I will let you go. Goodbye!');
+
+    // A forced wrap-up isn't reopened by stray speech
+    await say(ws, 'hello?');
+    expect(mocks.streamResponse).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(speechDurationMs('I will let you go. Goodbye!'));
     expect(mocks.endCall).toHaveBeenCalledWith(CALL_SID);
