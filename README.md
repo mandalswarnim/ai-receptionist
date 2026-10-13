@@ -2,6 +2,10 @@
 
 A production-ready AI phone receptionist. When a customer calls your business and nobody answers, the call forwards to this system. The AI picks up, has a full conversation, collects the caller's details, and emails a structured summary to you.
 
+
+> **Sales workflow (in progress):** see [`PLAN.md`](PLAN.md) for the build plan and
+> [`docs/sales/PLAYBOOK.md`](docs/sales/PLAYBOOK.md) for the calling process.
+
 ---
 
 ## How It Works
