@@ -77,12 +77,13 @@ router.use(validateTwilioSignature);
 
 router.post('/incoming-call', async (req: Request, res: Response) => {
   const body = req.body as TwilioCallPayload;
-  const { CallSid: callSid, From: from } = body;
+  const { CallSid: callSid, From: from, To: to } = body;
 
   logger.info('Forwarded call received — AI answering', { callSid, from });
 
   try {
-    const business = await businessSvc.getDefaultBusiness();
+    const business = await businessSvc.resolveBusinessForCall({ to, from });
+    logger.info('Answering as business', { callSid, business: business.slug, mode: business.mode });
     const greeting = aiSvc.buildGreeting(business);
 
     if (config.USE_CONVERSATION_RELAY) {
@@ -122,7 +123,7 @@ router.post('/gather', async (req: Request, res: Response) => {
   if (!state) {
     logger.info('No session found — creating one for gather', { callSid });
     const from = body.From || 'unknown';
-    const business = await businessSvc.getDefaultBusiness();
+    const business = await businessSvc.resolveBusinessForCall({ to: body.To, from });
     state = conversationSvc.createSession(callSid, from, business);
     const greeting = aiSvc.buildGreeting(business);
     conversationSvc.addTurn(callSid, 'assistant', greeting);

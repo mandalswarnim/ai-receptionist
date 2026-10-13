@@ -26,6 +26,7 @@ interface RelayMessage {
   last?: boolean;
   utteranceUntilInterrupt?: string;
   digit?: string;
+  customParameters?: Record<string, string>;
   description?: string;
 }
 
@@ -143,8 +144,8 @@ export function handleRelayConnection(ws: WebSocket): void {
     );
   };
 
-  const startSession = async (from: string) => {
-    const business = await businessSvc.getDefaultBusiness();
+  const startSession = async (from: string, to: string | undefined, businessId: string | undefined) => {
+    const business = await businessSvc.getBusinessForSession(businessId, { to, from });
     // Caller hung up while we loaded: nothing to set up, nothing to process
     if (ws.readyState !== ws.OPEN) return;
     conversationSvc.createSession(callSid, from, business);
@@ -182,7 +183,7 @@ export function handleRelayConnection(ws: WebSocket): void {
         const from = msg.from ?? 'unknown';
         logger.info('Relay session started', { callSid, from });
 
-        sessionReady = startSession(from).catch((err) => {
+        sessionReady = startSession(from, msg.to, msg.customParameters?.businessId).catch((err) => {
           logger.error('Relay: failed to start session', { callSid, err });
         });
         void startCallRecording(callSid);

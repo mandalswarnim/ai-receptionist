@@ -100,6 +100,13 @@ const configSchema = z.object({
   COMPANY_NAME: z.string().default('The Company'),
   COMPANY_TIMEZONE: z.string().default('UTC'),
 
+  // Sales demos
+  // Your mobile. When set, an active demo only answers calls from this
+  // number; every other call to the Twilio number (real forwarded calls)
+  // still gets the business it belongs to. Strongly recommended while real
+  // customers forward to the same number you demo from.
+  AGENT_PHONE_NUMBER: z.string().startsWith('+').optional(),
+
   // Optional
   SLACK_WEBHOOK_URL: z.string().url().optional(),
   ALERT_SMS_NUMBER: z.string().startsWith('+').optional(),

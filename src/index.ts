@@ -9,6 +9,8 @@ import { logger } from './lib/logger';
 import { connectDb, disconnectDb } from './lib/db';
 import webhookRoutes from './api/routes/webhooks';
 import callRoutes from './api/routes/calls';
+import businessRoutes from './api/routes/businesses';
+import demoRoutes from './api/routes/demo';
 import { notFound, errorHandler } from './api/middleware';
 import { handleRelayConnection } from './services/relay.service';
 import {
@@ -36,7 +38,7 @@ app.use(
 app.use(
   cors({
     origin: isDev ? '*' : config.BASE_URL,
-    methods: ['GET', 'POST', 'DELETE'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   })
 );
 
@@ -58,6 +60,8 @@ app.use(
 
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/businesses', businessRoutes);
+app.use('/api/demo', demoRoutes);
 
 // ─── Error handling ──────────────────────────────────────────────────────────
 

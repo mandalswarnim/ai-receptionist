@@ -61,13 +61,13 @@ one receptionist per prospect, switchable in seconds.
 - [x] Tests: prompt builder snapshot tests for a LIVE and a DEMO business; existing tests still pass.
 
 ### 1.3 Routing a call to the right business
-- [ ] Resolution order when a call arrives: (1) `To` number matches `Business.twilioNumber`
+- [x] Resolution order when a call arrives: (1) `To` number matches `Business.twilioNumber`
       (real customers, later); (2) an **active demo** is set; (3) default business.
-- [ ] Active demo: in-memory `{ businessId, expiresAt }` with a 30-minute TTL.
+- [x] Active demo: in-memory `{ businessId, expiresAt }` with a 30-minute TTL.
       `POST /api/demo/active { slug }` (admin auth) sets it, `DELETE` clears it,
       `GET` shows it. Pass `businessId` into the relay session via the ConversationRelay
       `<Parameter>` / setup message so the live loop doesn't depend on global state mid-call.
-- [ ] Admin CRUD: `GET/POST/PATCH/DELETE /api/businesses`.
+- [x] Admin CRUD: `GET/POST/PATCH/DELETE /api/businesses`.
 
 ### 1.4 Quick demo builder
 - [ ] `scripts/new-demo.ts "<pub name>" "<research notes>"`: sends the notes to the LLM,

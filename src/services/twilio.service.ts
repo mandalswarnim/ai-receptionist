@@ -111,9 +111,12 @@ export function buildErrorTwiml(): string {
  * text and speaks whatever text we send back (ElevenLabs TTS + Deepgram STT),
  * with barge-in handled natively.
  */
-export function buildRelayTwiml(greeting: string, business: HintSource): string {
+export function buildRelayTwiml(
+  greeting: string,
+  business: HintSource & Pick<BusinessProfile, 'id'>
+): string {
   const twiml = new VoiceResponse();
-  twiml.connect().conversationRelay({
+  const relay = twiml.connect().conversationRelay({
     url: `${wsBaseUrl}/api/relay?token=${relayAuthToken}`,
     welcomeGreeting: greeting,
     welcomeGreetingInterruptible: 'speech',
@@ -133,6 +136,9 @@ export function buildRelayTwiml(greeting: string, business: HintSource): string 
     elevenlabsTextNormalization: 'auto',
     profanityFilter: false,
   });
+  // Hands the business picked for this call to the relay session, so a demo
+  // switched mid-call can't change who the AI is answering for.
+  if (business.id) relay.parameter({ name: 'businessId', value: business.id });
   return twiml.toString();
 }
 

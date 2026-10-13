@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   streamResponse: vi.fn(),
   finishCall: vi.fn(),
   endCall: vi.fn(),
+  getBusinessForSession: vi.fn(),
 }));
 
 vi.mock('../src/config', () => ({ config: mocks.config }));
@@ -25,7 +26,7 @@ vi.mock('../src/services/call.service', () => ({
   finishCall: mocks.finishCall,
 }));
 vi.mock('../src/services/business.service', () => ({
-  getDefaultBusiness: vi.fn().mockResolvedValue({ id: 'biz-default', slug: 'default', mode: 'LIVE' }),
+  getBusinessForSession: mocks.getBusinessForSession,
 }));
 vi.mock('../src/services/twilio.service', () => ({
   startCallRecording: vi.fn().mockResolvedValue(undefined),
@@ -92,6 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.config.SILENCE_TIMEOUT_S = 10;
   mocks.config.MAX_CALL_DURATION_S = 600;
+  mocks.getBusinessForSession.mockResolvedValue({ id: 'biz-default', slug: 'default', mode: 'LIVE' });
 });
 
 afterEach(() => {
@@ -233,6 +235,40 @@ describe('relay conversation', () => {
     expect(state.callSid).toBe(CALL_SID);
     expect(state.turns).toHaveLength(3);
     expect(conversationSvc.getSession(CALL_SID)).toBeUndefined();
+  });
+
+  it('answers for the business picked at the incoming-call webhook', async () => {
+    const ws = new FakeSocket();
+    handleRelayConnection(ws as unknown as WebSocket);
+    ws.receive({
+      type: 'setup',
+      callSid: CALL_SID,
+      from: '+447700900123',
+      to: '+441000000000',
+      customParameters: { businessId: 'biz-crown' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.getBusinessForSession).toHaveBeenCalledWith('biz-crown', {
+      to: '+441000000000',
+      from: '+447700900123',
+    });
+  });
+
+  it('does not drop a prompt that arrives while the business is loading', async () => {
+    let release!: (b: unknown) => void;
+    mocks.getBusinessForSession.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const ws = new FakeSocket();
+    handleRelayConnection(ws as unknown as WebSocket);
+    ws.receive({ type: 'setup', callSid: CALL_SID, from: '+447700900123' });
+    reply('Lovely, thanks James.');
+    ws.receive({ type: 'prompt', voicePrompt: "It's James", last: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.streamResponse).not.toHaveBeenCalled();
+
+    release({ id: 'biz-default', slug: 'default', mode: 'LIVE' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ws.spoken()).toEqual(['Lovely, thanks James.']);
   });
 
   it('apologises and keeps listening when generation fails', async () => {

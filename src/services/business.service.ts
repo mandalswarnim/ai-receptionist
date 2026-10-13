@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { config } from '../config';
 import { db } from '../lib/db';
 import { logger } from '../lib/logger';
+import { clearActiveDemo, getActiveDemo } from './demo.service';
 
 /** Slug of the business built from env vars, used when no other business matches a call. */
 export const DEFAULT_BUSINESS_SLUG = 'default';
@@ -120,4 +121,58 @@ export async function getDefaultBusiness(): Promise<BusinessProfile> {
 /** The business a stored call belongs to, or the default for older calls. */
 export async function profileForCall(business: Business | null): Promise<BusinessProfile> {
   return business ? toProfile(business) : getDefaultBusiness();
+}
+
+// ─── Routing a call to its business ──────────────────────────────────────────
+
+/** Strips formatting so "+44 7700 900123" and "+447700900123" compare equal. */
+function samePhone(a: string | undefined, b: string | undefined): boolean {
+  const norm = (v?: string) => (v ?? '').replace(/[^\d+]/g, '');
+  return !!norm(a) && norm(a) === norm(b);
+}
+
+/**
+ * Picks the business a new call is answered for:
+ *   1. the business that owns the dialled number (real customers)
+ *   2. the active demo, if one is set (and, when AGENT_PHONE_NUMBER is set,
+ *      only for calls from that number, so real callers never get a demo)
+ *   3. the default business
+ * Never throws: a database problem falls through to the default business.
+ */
+export async function resolveBusinessForCall(call: { to?: string; from?: string }): Promise<BusinessProfile> {
+  try {
+    if (call.to) {
+      const owner = await db.business.findUnique({ where: { twilioNumber: call.to } });
+      if (owner) return toProfile(owner);
+    }
+
+    const demo = getActiveDemo();
+    if (demo && (!config.AGENT_PHONE_NUMBER || samePhone(call.from, config.AGENT_PHONE_NUMBER))) {
+      const business = await db.business.findUnique({ where: { id: demo.businessId } });
+      if (business) return toProfile(business);
+      clearActiveDemo(); // deleted since it was activated
+    }
+  } catch (err) {
+    logger.error('Business lookup failed — using the default business', { err });
+  }
+  return getDefaultBusiness();
+}
+
+/**
+ * The business chosen for a call at the incoming-call webhook, passed to the
+ * relay session by id. Falls back to resolving again if it can't be loaded.
+ */
+export async function getBusinessForSession(
+  businessId: string | undefined,
+  call: { to?: string; from?: string }
+): Promise<BusinessProfile> {
+  if (businessId) {
+    try {
+      const business = await db.business.findUnique({ where: { id: businessId } });
+      if (business) return toProfile(business);
+    } catch (err) {
+      logger.error('Could not load the business for a relay session', { businessId, err });
+    }
+  }
+  return resolveBusinessForCall(call);
 }
