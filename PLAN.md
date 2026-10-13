@@ -70,7 +70,7 @@ one receptionist per prospect, switchable in seconds.
 - [x] Admin CRUD: `GET/POST/PATCH/DELETE /api/businesses`.
 
 ### 1.4 Quick demo builder
-- [ ] `scripts/new-demo.ts "<pub name>" "<research notes>"`: sends the notes to the LLM,
+- [x] `scripts/new-demo.ts "<pub name>" "<research notes>"`: sends the notes to the LLM,
       gets back a strict-JSON `Business` (hours, menu notes, FAQs, booking system), prints
       it for review, saves it as DEMO on confirmation. Notes in, demo out in under 2 minutes.
 
@@ -91,7 +91,7 @@ results back. Spreadsheet ID and exact column names are in `CLAUDE.md`.
 - [ ] `src/services/sheets.service.ts` using `googleapis`: `getProspects()`,
       `getDoNotCall()`, `appendCallLog(row)`, `updateProspectStatus(name, status, nextActionDate)`.
       Header-name based column lookup (read row 1), never hardcoded letters.
-- [ ] `scripts/new-demo.ts --from-sheet "<pub name>"`: builds the demo from the Prospects row
+- [x] `scripts/new-demo.ts --from-sheet "<pub name>"`: builds the demo from the Prospects row
       (Research notes, Booking system, Address, Best time to call).
 - [ ] After a DEMO call ends: append a Call Log row (Date, Pub name, Time, AI demo used = TRUE,
       Notes = one-line AI summary + link to admin transcript). Swarnim fills the outcome.
