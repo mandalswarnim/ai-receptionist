@@ -46,6 +46,7 @@ npm test               # vitest
 npm run lint
 npm run typecheck
 npm run db:migrate:dev # create/apply a migration locally
+npm run db:seed        # create the default business from env vars (idempotent)
 npx ts-node scripts/test-flow.ts   # simulate a call with no phone
 ```
 

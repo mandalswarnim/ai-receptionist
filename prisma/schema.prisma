@@ -21,9 +21,40 @@ enum UrgencyLevel {
   URGENT
 }
 
+enum BusinessMode {
+  DEMO
+  LIVE
+}
+
+// A business the receptionist answers for. LIVE businesses are real
+// customers; DEMO businesses are prospects used on sales calls.
+model Business {
+  id                  String       @id @default(uuid())
+  slug                String       @unique
+  name                String
+  mode                BusinessMode @default(DEMO)
+  personaName         String
+  greeting            String?      // overrides the default greeting
+  openingHours        String?
+  address             String?
+  bookingSystem       String?
+  bookingInstructions String?
+  menuNotes           String?
+  faqs                Json         @default("[]") // [{ q, a }]
+  notifyEmail         String?
+  twilioNumber        String?      @unique
+
+  calls Call[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Call {
   id          String       @id @default(uuid())
   callSid     String       @unique
+  businessId  String?
+  business    Business?    @relation(fields: [businessId], references: [id], onDelete: SetNull)
   from        String
   to          String
   status      CallStatus   @default(IN_PROGRESS)
@@ -58,6 +89,7 @@ model Call {
   @@index([callSid])
   @@index([startedAt])
   @@index([status])
+  @@index([businessId])
 }
 
 model ConversationTurn {

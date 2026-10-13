@@ -39,13 +39,13 @@ Today the business is defined by env vars, so the app can only be one business. 
 one receptionist per prospect, switchable in seconds.
 
 ### 1.1 `Business` model
-- [ ] Prisma model `Business`:
+- [x] Prisma model `Business`:
       `id, slug (unique), name, mode (DEMO | LIVE), personaName, greeting (nullable, overrides default),
       openingHours (text), address, bookingSystem, bookingInstructions (text),
       menuNotes (text), faqs (Json, [{q, a}]), notifyEmail (nullable), twilioNumber (nullable, unique),
       createdAt, updatedAt`
-- [ ] `Call.businessId` (nullable FK) so every call record knows which business it was for.
-- [ ] Migration + seed script that creates the default business from the current env vars,
+- [x] `Call.businessId` (nullable FK) so every call record knows which business it was for.
+- [x] Migration + seed script that creates the default business from the current env vars,
       so nothing changes for existing setups.
 
 ### 1.2 Business-aware prompts
