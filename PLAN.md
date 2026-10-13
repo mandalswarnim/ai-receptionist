@@ -88,14 +88,16 @@ results back. Spreadsheet ID and exact column names are in `CLAUDE.md`.
 - [ ] Google Cloud project, Sheets API enabled, service account; share the sheet with the
       service account email (Editor). Env: `GOOGLE_SHEETS_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`
       (base64). Add both to `config` and `.env.example`. Document setup in README.
-- [ ] `src/services/sheets.service.ts` using `googleapis`: `getProspects()`,
+      _Code, config and README done. The Google Cloud setup and sharing is a manual step
+      (README → "Google Sheets sync"); verify with `npm run sheets:check`._
+- [x] `src/services/sheets.service.ts` using `googleapis`: `getProspects()`,
       `getDoNotCall()`, `appendCallLog(row)`, `updateProspectStatus(name, status, nextActionDate)`.
       Header-name based column lookup (read row 1), never hardcoded letters.
 - [x] `scripts/new-demo.ts --from-sheet "<pub name>"`: builds the demo from the Prospects row
       (Research notes, Booking system, Address, Best time to call).
-- [ ] After a DEMO call ends: append a Call Log row (Date, Pub name, Time, AI demo used = TRUE,
+- [x] After a DEMO call ends: append a Call Log row (Date, Pub name, Time, AI demo used = TRUE,
       Notes = one-line AI summary + link to admin transcript). Swarnim fills the outcome.
-- [ ] Unit tests with a mocked Sheets client.
+- [x] Unit tests with a mocked Sheets client.
 
 **Done when:** a prospect added to the Sheet can become a live demo with one command, and
 each demo call appears in `Call Log` without typing.

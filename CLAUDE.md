@@ -33,6 +33,8 @@ src/services/twilio.service.ts TwiML builders, Twilio REST helpers
 src/services/call.service.ts   Post-call pipeline: recording -> transcript -> extraction -> DB -> email
 src/services/business.service.ts Business profiles and call -> business routing (owned number > active demo > default)
 src/services/demo.service.ts   In-memory active demo (30-minute TTL)
+src/services/sheets.service.ts Google Sheets sync (header-based columns, first-empty-row writes)
+src/services/demo-builder.service.ts Research notes -> DEMO business profile (LLM)
 src/api/routes/webhooks.ts     Twilio webhooks (signature-validated)
 src/api/routes/calls.ts        Admin API (Bearer ADMIN_API_KEY)
 src/api/routes/businesses.ts   Admin CRUD for businesses
@@ -52,6 +54,8 @@ npm run typecheck
 npm run db:migrate:dev # create/apply a migration locally
 npm run db:seed        # create the default business from env vars (idempotent)
 npm run demo:new -- "<pub name>" "<notes | notes file>" [--activate]   # build a DEMO business from research notes
+npm run demo:new -- --from-sheet "<pub name>"                         # ...from its Prospects row
+npm run sheets:check   # read-only: Sheets access + column headers
 npx ts-node scripts/test-flow.ts   # simulate a call with no phone
 ```
 

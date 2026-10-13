@@ -13,12 +13,14 @@
     "db:studio": "prisma studio",
     "db:seed": "ts-node scripts/seed-default-business.ts",
     "demo:new": "ts-node scripts/new-demo.ts",
+    "sheets:check": "ts-node scripts/check-sheets.ts",
     "lint": "eslint src tests scripts",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@googleapis/sheets": "18.0.1",
     "@prisma/client": "^5.22.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

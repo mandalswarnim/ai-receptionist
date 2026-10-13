@@ -54,6 +54,20 @@ export function normalizeDraft(raw: unknown): DemoDraft {
   return draftSchema.parse(raw ?? {});
 }
 
+/**
+ * Research notes from a Prospects row. Best time to call and the contact are
+ * left out: they're for the salesperson, not the demo.
+ */
+export function prospectNotes(p: { address: string; bookingSystem: string; researchNotes: string }): string {
+  return [
+    p.address && `Address: ${p.address}`,
+    p.bookingSystem && `Booking system: ${p.bookingSystem}`,
+    p.researchNotes && `Notes: ${p.researchNotes}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function buildDemoPrompt(pubName: string, notes: string): string {
   return `You are setting up an AI phone receptionist demo for a UK pub called "${pubName}". The receptionist will answer the pub's phone, take table bookings and answer callers' questions, using only the facts you extract here.
 

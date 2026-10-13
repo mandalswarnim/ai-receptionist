@@ -27,9 +27,11 @@ const mocks = vi.hoisted(() => ({
     RECORD_CALLS: false,
     RECORDING_WAIT_MS: 0,
     TWILIO_PHONE_NUMBER: '+15550000000',
+    BASE_URL: 'https://reception.test',
   },
   extract: vi.fn(),
   sendEmail: vi.fn(),
+  appendCallLog: vi.fn(),
 }));
 
 vi.mock('../src/config', () => ({ config: mocks.config }));
@@ -73,6 +75,9 @@ vi.mock('../src/services/email.service', () => ({ sendCallSummaryEmail: mocks.se
 vi.mock('../src/services/slack.service', () => ({ sendSlackNotification: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../src/services/twilio.service', () => ({ sendUrgentSms: vi.fn() }));
 // A stored business stands in for its own profile; older calls get the default
+vi.mock('../src/services/sheets.service', () => ({
+  getSheets: () => ({ appendCallLog: mocks.appendCallLog }),
+}));
 vi.mock('../src/services/business.service', () => ({
   profileForCall: async (business: BusinessProfile | null) => business ?? LIVE_BUSINESS,
 }));
@@ -120,6 +125,7 @@ beforeEach(() => {
   mocks.extract.mockResolvedValue(extracted);
   mocks.sendEmail.mockResolvedValue(undefined);
   mocks.updateMany.mockResolvedValue({ count: 1 });
+  mocks.appendCallLog.mockResolvedValue(2);
 });
 
 describe('processCompletedCall', () => {
@@ -179,6 +185,36 @@ describe('processCompletedCall', () => {
 
     expect(mocks.upsert.mock.calls[0][0].create.businessId).toBe('biz-crown');
     expect(mocks.sendEmail.mock.calls[0][3]).toBe(demo);
+  });
+
+  it('adds a finished demo call to the Call Log with its summary and transcript link', async () => {
+    const demo = { ...LIVE_BUSINESS, id: 'biz-crown', name: 'The Crown', mode: 'DEMO' as const };
+
+    await processCompletedCall({ ...state(), business: demo });
+
+    expect(mocks.appendCallLog).toHaveBeenCalledWith({
+      date: new Date('2026-09-01T10:00:00Z'),
+      pubName: 'The Crown',
+      aiDemoUsed: true,
+      notes: 'AI demo: James called about an invoice. Transcript: https://reception.test/api/calls/call-1/transcript',
+    });
+  });
+
+  it('never puts real customer calls in the sales sheet', async () => {
+    await processCompletedCall(state());
+    expect(mocks.appendCallLog).not.toHaveBeenCalled();
+  });
+
+  it('a Sheets failure does not affect the email', async () => {
+    mocks.appendCallLog.mockRejectedValue(new Error('403 The caller does not have permission'));
+    const demo = { ...LIVE_BUSINESS, mode: 'DEMO' as const };
+
+    await processCompletedCall({ ...state(), business: demo });
+
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ emailSent: true }) })
+    );
   });
 
   it('still sends the email when saving the call fails', async () => {

@@ -15,6 +15,7 @@ import { withRetry } from '../lib/retry';
 import { isDialableNumber } from '../lib/phone';
 import { ConversationState, ExtractedCallData } from '../types';
 import { BusinessProfile, profileForCall } from './business.service';
+import { getSheets } from './sheets.service';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
 //
@@ -278,8 +279,9 @@ export async function processCompletedCall(
     // the update branch must write the turns too — replacing any from an
     // earlier attempt. Nested writes run in a single transaction.
     let saved = false;
+    let callId: string | undefined;
     try {
-      await db.call.upsert({
+      ({ id: callId } = await db.call.upsert({
         where: { callSid },
         create: {
           callSid,
@@ -294,7 +296,7 @@ export async function processCompletedCall(
           ...callFields,
           turns: { deleteMany: {}, create: turns },
         },
-      });
+      }));
       saved = true;
     } catch (err) {
       // Still send the email — it is the deliverable. Log the data so the
@@ -330,6 +332,9 @@ export async function processCompletedCall(
       });
     }
 
+    // 5. Demo calls go in the sales Call Log; Swarnim fills in the outcome
+    if (business.mode === 'DEMO') await logDemoCall(business, state.startedAt, finalData, callId);
+
     logger.info('Call processing complete', {
       callSid,
       urgency: finalData.urgency,
@@ -362,6 +367,33 @@ export async function processCompletedCall(
         },
       })
       .catch(() => null);
+  }
+}
+
+/**
+ * Adds a Call Log row for a finished demo call. Never throws: the sheet is a
+ * convenience, the email has already gone.
+ */
+async function logDemoCall(
+  business: BusinessProfile,
+  startedAt: Date,
+  data: ExtractedCallData,
+  callId: string | undefined
+): Promise<void> {
+  const sheets = getSheets();
+  if (!sheets) return;
+  const summary = (data.summary || data.message).replace(/\s+/g, ' ').trim();
+  const transcript = callId ? ` Transcript: ${config.BASE_URL}/api/calls/${callId}/transcript` : '';
+  try {
+    const row = await sheets.appendCallLog({
+      date: startedAt,
+      pubName: business.name,
+      aiDemoUsed: true,
+      notes: `AI demo: ${summary.slice(0, 400)}${transcript}`,
+    });
+    logger.info('Demo call added to the Call Log', { business: business.slug, row });
+  } catch (err) {
+    logger.error('Failed to add demo call to the Call Log', { business: business.slug, err });
   }
 }
 

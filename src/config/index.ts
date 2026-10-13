@@ -107,6 +107,11 @@ const configSchema = z.object({
   // customers forward to the same number you demo from.
   AGENT_PHONE_NUMBER: z.string().startsWith('+').optional(),
 
+  // Google Sheets sales pipeline (both needed; sync is off without them).
+  // The service-account key JSON, base64-encoded:  base64 -i key.json | tr -d '\n'
+  GOOGLE_SHEETS_ID: z.string().min(1).optional(),
+  GOOGLE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional(),
+
   // Optional
   SLACK_WEBHOOK_URL: z.string().url().optional(),
   ALERT_SMS_NUMBER: z.string().startsWith('+').optional(),

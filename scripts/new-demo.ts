@@ -6,6 +6,7 @@
  * Usage:
  *   npm run demo:new -- "<pub name>" "<research notes>"
  *   npm run demo:new -- "<pub name>" notes.txt        (notes from a file)
+ *   npm run demo:new -- --from-sheet "<pub name>"     (from its Prospects row)
  *
  * Options:
  *   --yes         save without asking
@@ -18,19 +19,24 @@ import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline/promises';
 import { config } from '../src/config';
 import { db } from '../src/lib/db';
-import { buildDemoDraft, DemoDraft, slugify } from '../src/services/demo-builder.service';
+import { buildDemoDraft, DemoDraft, prospectNotes, slugify } from '../src/services/demo-builder.service';
+import { getSheets } from '../src/services/sheets.service';
 import { buildGreeting } from '../src/services/ai.service';
 
 interface Args {
   pubName: string;
-  notes: string;
+  /** null with --from-sheet: read from the Prospects row. */
+  notes: string | null;
   yes: boolean;
   activate: boolean;
   persona: string;
 }
 
 function usage(): never {
-  console.error('Usage: npm run demo:new -- "<pub name>" "<research notes | notes file>" [--yes] [--activate] [--persona Name]');
+  console.error(
+    'Usage: npm run demo:new -- "<pub name>" "<research notes | notes file>" [--yes] [--activate] [--persona Name]\n' +
+      '       npm run demo:new -- --from-sheet "<pub name>" [--yes] [--activate] [--persona Name]'
+  );
   process.exit(1);
 }
 
@@ -39,16 +45,20 @@ function parseArgs(argv: string[]): Args {
   let yes = false;
   let activate = false;
   let persona = config.PERSONA_NAME;
+  let fromSheet = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === '--yes' || arg === '-y') yes = true;
     else if (arg === '--activate') activate = true;
+    else if (arg === '--from-sheet') fromSheet = true;
     else if (arg === '--persona') persona = argv[++i] ?? usage();
     else if (arg.startsWith('--')) usage();
     else positional.push(arg);
   }
   const [pubName, notesArg] = positional;
-  if (!pubName?.trim() || !notesArg?.trim()) usage();
+  if (!pubName?.trim()) usage();
+  if (fromSheet) return { pubName: pubName.trim(), notes: null, yes, activate, persona };
+  if (!notesArg?.trim()) usage();
   const notes = existsSync(notesArg) ? readFileSync(notesArg, 'utf8') : notesArg;
   return { pubName: pubName.trim(), notes, yes, activate, persona };
 }
@@ -97,8 +107,38 @@ async function activate(slug: string): Promise<void> {
   }
 }
 
+/** The prospect's research, using the pub name exactly as the sheet spells it. */
+async function fromSheet(pubName: string): Promise<{ pubName: string; notes: string } | null> {
+  const sheets = getSheets();
+  if (!sheets) {
+    console.error('Google Sheets sync is off: set GOOGLE_SHEETS_ID and GOOGLE_SERVICE_ACCOUNT_JSON (see README).');
+    return null;
+  }
+  const prospects = await sheets.getProspects();
+  const prospect = prospects.find((p) => p.pubName.toLowerCase() === pubName.toLowerCase());
+  if (!prospect) {
+    console.error(`No "${pubName}" in the Prospects tab.`);
+    if (prospects.length) console.error(`Pubs in the sheet: ${prospects.map((p) => p.pubName).join(', ')}`);
+    return null;
+  }
+  const notes = prospectNotes(prospect);
+  if (!notes) {
+    console.error(`"${prospect.pubName}" has no research notes, address or booking system in the sheet yet.`);
+    return null;
+  }
+  return { pubName: prospect.pubName, notes };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.notes === null) {
+    const prospect = await fromSheet(args.pubName);
+    if (!prospect) {
+      process.exitCode = 1;
+      return;
+    }
+    Object.assign(args, prospect);
+  }
   const slug = slugify(args.pubName);
   if (!slug) usage();
 
@@ -110,7 +150,7 @@ async function main() {
   }
 
   console.log(`Reading the notes for ${args.pubName}...`);
-  const draft = await buildDemoDraft(args.pubName, args.notes);
+  const draft = await buildDemoDraft(args.pubName, args.notes!);
   printDraft(args.pubName, slug, args.persona, draft);
 
   const data = { name: args.pubName, personaName: args.persona, ...draft };

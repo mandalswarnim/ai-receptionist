@@ -234,6 +234,51 @@ Once call forwarding is set up on your business phone, call your business number
 
 ---
 
+## Sales Demos
+
+A DEMO business answers as a prospect pub ("Good afternoon, The Crown…") so the owner hears
+what their callers would get. See [`PLAN.md`](PLAN.md) and
+[`docs/sales/PLAYBOOK.md`](docs/sales/PLAYBOOK.md).
+
+```bash
+npm run demo:new -- "The Crown" "Open 12–11 daily, food 12–9, dogs welcome, ResDiary…"
+npm run demo:new -- "The Crown" notes.txt --activate     # notes from a file, make it live for 30 min
+npm run demo:new -- --from-sheet "The Crown"              # notes from the Prospects tab
+```
+
+Set `AGENT_PHONE_NUMBER` to your mobile: an active demo then only answers calls from you, and
+real forwarded calls keep their own business.
+
+### Google Sheets sync
+
+The sales pipeline lives in a Google Sheet (tabs and columns in [`CLAUDE.md`](CLAUDE.md)). With
+the sync on, `demo:new --from-sheet` reads a pub's `Prospects` row, and every finished demo call
+adds a `Call Log` row (date, pub, time, *AI demo used* ticked, AI summary + transcript link) for
+you to fill in the outcome. The sync is off until both env vars are set; nothing else changes.
+
+One-off setup (about 10 minutes):
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a project (or pick
+   one) and enable the **Google Sheets API** (*APIs & Services → Library*).
+2. *APIs & Services → Credentials → Create credentials → Service account*. Give it any name;
+   it needs no project roles.
+3. Open the service account → *Keys → Add key → Create new key → JSON*. A `.json` file downloads.
+   Treat it like a password: don't commit it or paste it anywhere public.
+4. Open the spreadsheet → *Share* → add the service account's `client_email` (from the JSON,
+   ends in `iam.gserviceaccount.com`) as an **Editor**. Untick "Notify people".
+5. Add to `.env` (and your server's env):
+   ```bash
+   GOOGLE_SHEETS_ID=1ISOr0C6qAbH8KVk3M-IjNmydXqS0vwO3oXIJTCxm73k
+   GOOGLE_SERVICE_ACCOUNT_JSON=<output of: base64 -i key.json | tr -d '\n'>
+   ```
+   Then delete the downloaded `.json` file.
+6. Check it: `npm run sheets:check` (read-only) confirms access and that every tab has the
+   columns the app expects.
+
+The app finds columns by their header in row 1, so you can reorder or add columns freely; just
+don't rename the headers. It only ever writes the cells it sets: checkboxes, the *Times called*
+formula and the *Dashboard* tab are never touched.
+
 ## API Endpoints
 
 ### Admin
@@ -251,6 +296,12 @@ Without `ADMIN_API_KEY` the admin API is disabled (503) in every environment.
 | GET    | `/api/calls/:id`            | Full call + conversation turns     |
 | GET    | `/api/calls/:id/transcript` | Full transcript                    |
 | DELETE | `/api/calls/:id`            | Delete a call record               |
+| GET    | `/api/businesses`           | List businesses (LIVE and DEMO)    |
+| POST   | `/api/businesses`           | Create a business (DEMO by default) |
+| GET / PATCH / DELETE | `/api/businesses/:slug` | Get, update or delete one |
+| GET    | `/api/demo/active`          | Show the active demo               |
+| POST   | `/api/demo/active`          | `{ "slug": "..." }` — make a DEMO business answer for 30 min |
+| DELETE | `/api/demo/active`          | Clear the active demo              |
 
 ### Twilio Webhooks (called by Twilio automatically)
 
@@ -316,6 +367,9 @@ The email includes:
 | `COMPANY_TIMEZONE` | No       | Default: `UTC`                               |
 | `SLACK_WEBHOOK_URL`| No       | Slack notifications (optional)               |
 | `ALERT_SMS_NUMBER` | No       | SMS alert for urgent calls (optional)        |
+| `AGENT_PHONE_NUMBER` | No     | Your mobile; an active demo only answers calls from it (recommended) |
+| `GOOGLE_SHEETS_ID` | No       | Sales pipeline spreadsheet (Sheets sync)     |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | No | Base64 service-account key (Sheets sync) |
 
 ---
 

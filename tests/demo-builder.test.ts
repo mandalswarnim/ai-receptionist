@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../src/config', () => ({ config: { OPENAI_API_KEY: 'sk-test', EXTRACTION_MODEL: 'gpt-4.1' } }));
 
-import { buildDemoPrompt, normalizeDraft, slugify } from '../src/services/demo-builder.service';
+import { buildDemoPrompt, normalizeDraft, prospectNotes, slugify } from '../src/services/demo-builder.service';
 
 describe('slugify', () => {
   it.each([
@@ -60,5 +60,17 @@ describe('buildDemoPrompt', () => {
   it('keeps sales research out of what callers hear', () => {
     expect(prompt).toContain('Leave out anything that is sales research');
     expect(prompt).toMatch(/reviews, complaints about the phone/);
+  });
+});
+
+describe('prospectNotes', () => {
+  it('builds notes from the Prospects row, leaving out sales-only columns', () => {
+    expect(
+      prospectNotes({ address: '2 High St, Marlow', bookingSystem: 'ResDiary', researchNotes: 'Dogs welcome. Roasts 12–5.' })
+    ).toBe('Address: 2 High St, Marlow\nBooking system: ResDiary\nNotes: Dogs welcome. Roasts 12–5.');
+  });
+
+  it('is empty when the row has nothing to build from', () => {
+    expect(prospectNotes({ address: '', bookingSystem: '', researchNotes: '' })).toBe('');
   });
 });
