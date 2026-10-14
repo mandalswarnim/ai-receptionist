@@ -5,6 +5,7 @@ A production-ready AI phone receptionist. When a customer calls your business an
 
 > **Sales workflow (in progress):** see [`PLAN.md`](PLAN.md) for the build plan and
 > [`docs/sales/PLAYBOOK.md`](docs/sales/PLAYBOOK.md) for the calling process.
+> Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 

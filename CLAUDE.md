@@ -12,7 +12,7 @@ We are now adding a **sales workflow**: Swarnim calls pubs himself and conferenc
 in a demo receptionist that answers as *that pub*, so the owner hears exactly what
 their callers would get. Read `PLAN.md` before starting any feature work; it is the
 source of truth for scope and order. Sales process and call script live in
-`docs/sales/PLAYBOOK.md`.
+`docs/sales/PLAYBOOK.md`. How the pieces fit together: `docs/ARCHITECTURE.md`.
 
 ## Stack
 
