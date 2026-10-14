@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../src/config', () => ({ config: { OPENAI_API_KEY: 'sk-test', EXTRACTION_MODEL: 'gpt-4.1' } }));
+vi.mock('../src/lib/db', () => ({ db: {} }));
 
 import { buildDemoPrompt, normalizeDraft, prospectNotes, slugify } from '../src/services/demo-builder.service';
 

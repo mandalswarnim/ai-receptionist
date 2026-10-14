@@ -19,7 +19,7 @@ import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline/promises';
 import { config } from '../src/config';
 import { db } from '../src/lib/db';
-import { buildDemoDraft, DemoDraft, prospectNotes, slugify } from '../src/services/demo-builder.service';
+import { buildDemoDraft, DemoDraft, prospectNotes, saveDemo, slugify } from '../src/services/demo-builder.service';
 import { getSheets } from '../src/services/sheets.service';
 import { buildGreeting } from '../src/services/ai.service';
 
@@ -162,11 +162,7 @@ async function main() {
     return;
   }
 
-  await db.business.upsert({
-    where: { slug },
-    create: { slug, mode: 'DEMO', ...data },
-    update: data,
-  });
+  await saveDemo(args.pubName, args.persona, draft);
   console.log(`${existing ? 'Updated' : 'Saved'} "${slug}".`);
 
   if (args.activate) await activate(slug);

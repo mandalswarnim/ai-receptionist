@@ -28,7 +28,14 @@ import {
   resolveBusinessForCall,
   toProfile,
 } from '../src/services/business.service';
-import { ACTIVE_DEMO_TTL_MS, clearActiveDemo, getActiveDemo, setActiveDemo } from '../src/services/demo.service';
+import {
+  ACTIVE_DEMO_TTL_MS,
+  cancelCockpitDemo,
+  clearActiveDemo,
+  expectCockpitDemo,
+  getActiveDemo,
+  setActiveDemo,
+} from '../src/services/demo.service';
 
 const row = (over: Record<string, unknown>) => ({
   id: 'x',
@@ -58,6 +65,7 @@ const ROWS = [DEFAULT_ROW, CUSTOMER_ROW, DEMO_ROW];
 beforeEach(() => {
   vi.clearAllMocks();
   clearActiveDemo();
+  cancelCockpitDemo();
   mocks.config.AGENT_PHONE_NUMBER = undefined;
   mocks.findUnique.mockImplementation(async ({ where }: { where: Record<string, string> }) => {
     const [[key, value]] = Object.entries(where);
@@ -106,6 +114,22 @@ describe('resolveBusinessForCall', () => {
     const b = await resolveBusinessForCall({ to: '+447000000000', from: '+447700900123' });
     expect(b.slug).toBe('default');
     expect(getActiveDemo()).toBeUndefined();
+  });
+
+  it("answers the cockpit's demo leg (from our own number) as the queued pub", async () => {
+    const onClaim = vi.fn();
+    expectCockpitDemo('biz-demo', onClaim);
+
+    const b = await resolveBusinessForCall({ to: 'app:APdemo', from: '+447000000000', callSid: 'CA_AI' });
+
+    expect(b.slug).toBe('the-bell');
+    expect(onClaim).toHaveBeenCalledWith('CA_AI');
+  });
+
+  it('a real caller cannot claim the cockpit demo', async () => {
+    expectCockpitDemo('biz-demo', vi.fn());
+    const b = await resolveBusinessForCall({ to: '+447000000000', from: '+447700900123', callSid: 'CA_REAL' });
+    expect(b.slug).toBe('default');
   });
 
   it('falls back to the default business when the lookup fails', async () => {

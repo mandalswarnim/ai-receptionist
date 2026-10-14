@@ -279,6 +279,45 @@ The app finds columns by their header in row 1, so you can reorder or add column
 don't rename the headers. It only ever writes the cells it sets: checkboxes, the *Times called*
 formula and the *Dashboard* tab are never touched.
 
+### Calling cockpit
+
+`https://<your server>/cockpit` runs a whole sales call from one page. Open it, enter your
+`ADMIN_API_KEY` (kept in that browser tab only), and:
+
+1. **Pick a prospect.** The queue shows `Prospects` rows with Status *Not called* or *Callback*
+   whose *Next action date* is due; callbacks first. Rows on `Do Not Call` show as blocked.
+2. **Build demo** (once per pub) turns the row's research notes into the demo receptionist.
+3. **Call** rings your mobile (`AGENT_PHONE_NUMBER`). Answer and **press 1**: only then is the pub
+   dialled, from your Twilio number. If your voicemail answers, nobody is dialled.
+4. When they agree to hear it, **Bring in demo**. The AI joins the call answering as their pub;
+   you're muted so it can't hear you. **Unmute me** to take over, **Remove AI** to take it off.
+5. **Hang up**, then fill in the outcome. It writes a `Call Log` row, updates the prospect's
+   Status and Next action date, and "Asked not to be called" also adds them to `Do Not Call`.
+
+Checked in code before the pub is dialled (and again when you press 1): the `Do Not Call` tab,
+a "Do not call" status, and `CALLING_HOURS` (default Mon–Fri 09:00–20:00, Sat 10:00–17:00, UK
+time). The AI never dials a prospect itself. `RECORD_SALES_CALLS=true` adds a *Record* button,
+to be used only after telling the prospect.
+
+To test without a real pub, add a row to `Prospects` with your own second phone as the number.
+
+### Going live checklist
+
+On the server (in this order):
+
+- [ ] Deploy this version, then `npm run db:migrate` and `npm run db:seed`
+- [ ] Env: `AGENT_PHONE_NUMBER` (your mobile), `GOOGLE_SHEETS_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`
+      (see Google Sheets sync above), optionally `CALLING_HOURS` / `RECORD_SALES_CALLS`
+- [ ] `npx ts-node scripts/setup-twilio.ts` with `BASE_URL` set to the server; put the printed
+      `TWILIO_DEMO_APP_SID` in the server env and restart
+- [ ] `npm run sheets:check` passes
+- [ ] Twilio: account upgraded (trial accounts can only call verified numbers), UK enabled under
+      *Voice → Settings → Geo permissions*, and `TWILIO_PHONE_NUMBER` is a UK number so pubs see
+      a local caller ID
+- [ ] Test call: a `Prospects` row with your second phone → Build demo → Call → press 1 →
+      answer the second phone → Bring in demo → hear "Good afternoon, …" → Hang up → log it
+- [ ] Ring the Twilio number from another phone: it still answers as your normal business
+
 ## API Endpoints
 
 ### Admin
@@ -302,6 +341,7 @@ Without `ADMIN_API_KEY` the admin API is disabled (503) in every environment.
 | GET    | `/api/demo/active`          | Show the active demo               |
 | POST   | `/api/demo/active`          | `{ "slug": "..." }` — make a DEMO business answer for 30 min |
 | DELETE | `/api/demo/active`          | Clear the active demo              |
+| *      | `/api/cockpit/*`            | Calling cockpit (used by `/cockpit`) |
 
 ### Twilio Webhooks (called by Twilio automatically)
 
@@ -367,7 +407,10 @@ The email includes:
 | `COMPANY_TIMEZONE` | No       | Default: `UTC`                               |
 | `SLACK_WEBHOOK_URL`| No       | Slack notifications (optional)               |
 | `ALERT_SMS_NUMBER` | No       | SMS alert for urgent calls (optional)        |
-| `AGENT_PHONE_NUMBER` | No     | Your mobile; an active demo only answers calls from it (recommended) |
+| `AGENT_PHONE_NUMBER` | No     | Your mobile: the cockpit rings it; an active demo only answers calls from it |
+| `CALLING_HOURS`    | No       | When the cockpit may dial prospects (UK time). Default `Mon-Fri 09:00-20:00; Sat 10:00-17:00` |
+| `RECORD_SALES_CALLS` | No     | `true` adds a Record button to the cockpit. Default `false` |
+| `TWILIO_DEMO_APP_SID` | No    | TwiML App that adds the demo to cockpit calls (from `setup-twilio.ts`) |
 | `GOOGLE_SHEETS_ID` | No       | Sales pipeline spreadsheet (Sheets sync)     |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | No | Base64 service-account key (Sheets sync) |
 

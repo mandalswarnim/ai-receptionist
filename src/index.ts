@@ -11,6 +11,8 @@ import webhookRoutes from './api/routes/webhooks';
 import callRoutes from './api/routes/calls';
 import businessRoutes from './api/routes/businesses';
 import demoRoutes from './api/routes/demo';
+import cockpitRoutes from './api/routes/cockpit';
+import path from 'path';
 import { notFound, errorHandler } from './api/middleware';
 import { handleRelayConnection } from './services/relay.service';
 import {
@@ -62,6 +64,15 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/businesses', businessRoutes);
 app.use('/api/demo', demoRoutes);
+app.use('/api/cockpit', cockpitRoutes);
+
+// Calling cockpit page. It holds no data: everything it shows comes from
+// /api/cockpit with the admin key the user types in.
+const cockpitPage = path.resolve(__dirname, '../public/cockpit.html');
+app.get('/cockpit', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(cockpitPage);
+});
 
 // ─── Error handling ──────────────────────────────────────────────────────────
 

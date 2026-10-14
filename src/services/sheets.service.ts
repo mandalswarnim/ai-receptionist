@@ -308,6 +308,24 @@ export function createSheetsService(client: SheetsClient) {
       });
     },
 
+    /** Adds a number to Do Not Call. */
+    appendDoNotCall(entry: { pubName: string; phone: string; date: Date; reason?: string; howTheyAsked?: string }) {
+      return serialise(async () => {
+        const t = await readTable(TABS.doNotCall);
+        const row = firstEmptyRow(t, ['Pub name', 'Phone']);
+        const values: Record<string, string> = {
+          'Pub name': entry.pubName,
+          // Leading apostrophe keeps "01628..." as text instead of a number
+          Phone: `'${entry.phone}`,
+          'Date added': sheetDate(entry.date),
+        };
+        if (entry.reason) values['Reason'] = entry.reason;
+        if (entry.howTheyAsked) values['How they asked'] = entry.howTheyAsked;
+        await writeRow(t, row, values);
+        return row;
+      });
+    },
+
     /** Sets a prospect's Status (and Next action date, when given). */
     updateProspectStatus(pubName: string, status: ProspectStatus, nextActionDate?: Date): Promise<void> {
       return serialise(async () => {

@@ -34,6 +34,9 @@ src/services/call.service.ts   Post-call pipeline: recording -> transcript -> ex
 src/services/business.service.ts Business profiles and call -> business routing (owned number > active demo > default)
 src/services/demo.service.ts   In-memory active demo (30-minute TTL)
 src/services/sheets.service.ts Google Sheets sync (header-based columns, first-empty-row writes)
+src/services/cockpit.service.ts Calling cockpit: agent leg -> press 1 -> conference -> pub; demo participant; outcome
+src/api/routes/cockpit.ts      Cockpit API (admin auth); page is public/cockpit.html at GET /cockpit
+src/lib/calling-hours.ts       CALLING_HOURS window (UK time)
 src/services/demo-builder.service.ts Research notes -> DEMO business profile (LLM)
 src/api/routes/webhooks.ts     Twilio webhooks (signature-validated)
 src/api/routes/calls.ts        Admin API (Bearer ADMIN_API_KEY)

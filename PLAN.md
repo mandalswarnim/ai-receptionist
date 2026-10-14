@@ -109,22 +109,24 @@ each demo call appears in `Call Log` without typing.
 Replace the phone "Add call / Merge" trick with a page that does it in one click and logs
 the outcome.
 
-- [ ] `website/` or a small page served by the API at `/cockpit` (admin auth): shows the next
+- [x] `website/` or a small page served by the API at `/cockpit` (admin auth): shows the next
       prospect from the Sheet (Status = Not called or Callback, Next action date due), the
       research notes, best time to call, and Times called.
-- [ ] **Call** button: Twilio calls Swarnim's mobile first (`AGENT_PHONE_NUMBER`), then dials the
+- [x] **Call** button: Twilio calls Swarnim's mobile first (`AGENT_PHONE_NUMBER`), then dials the
       pub into a named Twilio Conference (`<Dial><Conference>`). Caller ID is our Twilio number,
       never withheld.
-- [ ] Before dialling: phone number checked against the `Do Not Call` tab and refused if found.
+- [x] Before dialling: phone number checked against the `Do Not Call` tab and refused if found.
       Calls only allowed Mon–Fri 09:00–20:00 and Sat 10:00–17:00 Europe/London unless overridden.
-- [ ] **Bring in demo** button: sets that pub's demo active and adds a ConversationRelay participant
+- [x] **Bring in demo** button: sets that pub's demo active and adds a ConversationRelay participant
       to the conference (Participants API, TwiML URL that returns the relay TwiML for that
       business). Swarnim can stay on, muted, and unmute to take over.
-- [ ] **Remove AI** button: removes the AI participant, call continues between humans.
-- [ ] Outcome form after hang-up (Outcome, Reached decision maker, Demo reaction, Objection,
+      _Built as a one-off hand-off instead of the global active demo: the demo leg (a TwiML App
+      participant, from our own number) claims the pub, so no other caller can get the demo._
+- [x] **Remove AI** button: removes the AI participant, call continues between humans.
+- [x] Outcome form after hang-up (Outcome, Reached decision maker, Demo reaction, Objection,
       Next step, Follow-up date, Notes) writes to `Call Log` and updates `Prospects` Status.
       "Asked not to be called" also appends to `Do Not Call`.
-- [ ] Conference status callbacks logged; recording of the conference only if
+- [x] Conference status callbacks logged; recording of the conference only if
       `RECORD_SALES_CALLS=true` and the prospect has been told.
 
 **Done when:** a full sales call, from picking the prospect to logging the outcome, happens on

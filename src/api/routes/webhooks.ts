@@ -14,10 +14,10 @@
  * POST /api/webhooks/gather          — Fires each time the caller speaks (webhook mode)
  * POST /api/webhooks/recording       — Fires when call recording is ready
  * POST /api/webhooks/call-status     — Fires on final call status change
+ * POST /api/webhooks/cockpit/*       — Calling cockpit legs (see cockpit.service.ts)
  */
 
 import { Router, Request, Response } from 'express';
-import twilio from 'twilio';
 import { config } from '../../config';
 import { logger } from '../../lib/logger';
 import {
@@ -30,42 +30,13 @@ import * as aiSvc from '../../services/ai.service';
 import * as twilioSvc from '../../services/twilio.service';
 import * as callSvc from '../../services/call.service';
 import * as businessSvc from '../../services/business.service';
+import * as cockpitSvc from '../../services/cockpit.service';
+import { validateTwilioSignature } from '../middleware';
 
 const router = Router();
 
 /** Consecutive silent turns tolerated before the AI says goodbye. */
 const MAX_SILENT_PROMPTS = 2;
-
-// ─── Twilio request validation middleware ────────────────────────────────────
-
-if (config.SKIP_TWILIO_SIGNATURE) {
-  logger.warn('SKIP_TWILIO_SIGNATURE is on — webhooks accept unsigned requests');
-}
-
-function validateTwilioSignature(req: Request, res: Response, next: () => void): void {
-  // Explicit opt-out only (refused in production by config). Validation must
-  // not hinge on NODE_ENV: a deploy that forgets to set it would otherwise
-  // accept forged webhooks.
-  if (config.SKIP_TWILIO_SIGNATURE) {
-    next();
-    return;
-  }
-
-  const isValid = twilio.validateRequest(
-    config.TWILIO_AUTH_TOKEN,
-    req.headers['x-twilio-signature'] as string,
-    `${config.BASE_URL}${req.originalUrl}`,
-    req.body as Record<string, string>
-  );
-
-  if (!isValid) {
-    logger.warn('Invalid Twilio signature', { url: req.originalUrl });
-    res.status(403).send('Forbidden');
-    return;
-  }
-
-  next();
-}
 
 // Apply Twilio validation to all webhook routes
 router.use(validateTwilioSignature);
@@ -82,7 +53,7 @@ router.post('/incoming-call', async (req: Request, res: Response) => {
   logger.info('Forwarded call received — AI answering', { callSid, from });
 
   try {
-    const business = await businessSvc.resolveBusinessForCall({ to, from });
+    const business = await businessSvc.resolveBusinessForCall({ to, from, callSid });
     logger.info('Answering as business', { callSid, business: business.slug, mode: business.mode });
     const greeting = aiSvc.buildGreeting(business);
 
@@ -123,7 +94,7 @@ router.post('/gather', async (req: Request, res: Response) => {
   if (!state) {
     logger.info('No session found — creating one for gather', { callSid });
     const from = body.From || 'unknown';
-    const business = await businessSvc.resolveBusinessForCall({ to: body.To, from });
+    const business = await businessSvc.resolveBusinessForCall({ to: body.To, from, callSid });
     state = conversationSvc.createSession(callSid, from, business);
     const greeting = aiSvc.buildGreeting(business);
     conversationSvc.addTurn(callSid, 'assistant', greeting);
@@ -235,6 +206,52 @@ router.post('/call-status', async (req: Request, res: Response) => {
       callSvc.finishCall(finalState, CallDuration ? parseInt(CallDuration, 10) : undefined);
     }
   }
+});
+
+// ─── 5. Calling cockpit ──────────────────────────────────────────────────────
+//
+// Each URL carries ?session=<id>; callbacks for an old or unknown session are
+// acknowledged and ignored.
+
+const cockpitSession = (req: Request) => cockpitSvc.sessionFor(req.query['session'] as string | undefined);
+
+/** Swarnim answered his phone: ask him to press 1 before the pub is dialled. */
+router.post('/cockpit/agent-answer', (req: Request, res: Response) => {
+  res.type('text/xml').send(cockpitSvc.agentAnswerTwiml(cockpitSession(req)));
+});
+
+router.post('/cockpit/agent-connect', async (req: Request, res: Response) => {
+  const body = req.body as { Digits?: string };
+  try {
+    res.type('text/xml').send(await cockpitSvc.agentConnectTwiml(cockpitSession(req), body.Digits));
+  } catch (err) {
+    logger.error('Cockpit: agent-connect failed', { err });
+    res.type('text/xml').send(twilioSvc.buildErrorTwiml());
+  }
+});
+
+router.post('/cockpit/conference', (req: Request, res: Response) => {
+  res.sendStatus(204);
+  cockpitSvc
+    .onConferenceEvent(cockpitSession(req), req.body as Record<string, string>)
+    .catch((err) => logger.error('Cockpit: conference event failed', { err }));
+});
+
+router.post('/cockpit/leg-status', (req: Request, res: Response) => {
+  res.sendStatus(204);
+  const body = req.body as { CallStatus?: string };
+  cockpitSvc.onLegStatus(cockpitSession(req), req.query['leg'] as string | undefined, body.CallStatus);
+});
+
+router.post('/cockpit/recording', (req: Request, res: Response) => {
+  res.sendStatus(204);
+  const body = req.body as { RecordingSid?: string; RecordingUrl?: string; RecordingDuration?: string };
+  logger.info('Cockpit: sales call recording ready', {
+    session: req.query['session'],
+    recordingSid: body.RecordingSid,
+    recordingUrl: body.RecordingUrl,
+    duration: body.RecordingDuration,
+  });
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

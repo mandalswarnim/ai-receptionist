@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 import { createHmac } from 'crypto';
+import { parseCallingHours } from '../lib/calling-hours';
 
 dotenv.config();
 
@@ -106,6 +107,18 @@ const configSchema = z.object({
   // still gets the business it belongs to. Strongly recommended while real
   // customers forward to the same number you demo from.
   AGENT_PHONE_NUMBER: z.string().startsWith('+').optional(),
+  // Calling cockpit (/cockpit): when sales calls to prospects may be dialled,
+  // UK time. Format: "Mon-Fri 09:00-20:00; Sat 10:00-17:00" (the default).
+  CALLING_HOURS: z.string().optional(),
+  // Lets the cockpit record a sales call, only after you've told the prospect.
+  RECORD_SALES_CALLS: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
+  // TwiML App that brings the demo receptionist into a cockpit call
+  // (created by scripts/setup-twilio.ts). Without it the cockpit dials our
+  // own number instead, which works but costs an extra call leg.
+  TWILIO_DEMO_APP_SID: z.string().startsWith('AP').optional(),
 
   // Google Sheets sales pipeline (both needed; sync is off without them).
   // The service-account key JSON, base64-encoded:  base64 -i key.json | tr -d '\n'
@@ -137,6 +150,14 @@ function loadConfig() {
       console.error(`   ${issue.path.join('.')}: ${issue.message}`);
     });
     process.exit(1);
+  }
+  if (result.data.CALLING_HOURS) {
+    try {
+      parseCallingHours(result.data.CALLING_HOURS);
+    } catch (err) {
+      console.error(`❌ CALLING_HOURS: ${(err as Error).message}`);
+      process.exit(1);
+    }
   }
   if (result.data.SKIP_TWILIO_SIGNATURE && result.data.NODE_ENV === 'production') {
     console.error('❌ SKIP_TWILIO_SIGNATURE=true is not allowed in production');

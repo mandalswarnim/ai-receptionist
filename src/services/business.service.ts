@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { config } from '../config';
 import { db } from '../lib/db';
 import { logger } from '../lib/logger';
-import { clearActiveDemo, getActiveDemo } from './demo.service';
+import { claimCockpitDemo, clearActiveDemo, getActiveDemo } from './demo.service';
 
 /** Slug of the business built from env vars, used when no other business matches a call. */
 export const DEFAULT_BUSINESS_SLUG = 'default';
@@ -133,14 +133,27 @@ function samePhone(a: string | undefined, b: string | undefined): boolean {
 
 /**
  * Picks the business a new call is answered for:
+ *   0. the demo leg the calling cockpit just added (from our own number)
  *   1. the business that owns the dialled number (real customers)
  *   2. the active demo, if one is set (and, when AGENT_PHONE_NUMBER is set,
  *      only for calls from that number, so real callers never get a demo)
  *   3. the default business
  * Never throws: a database problem falls through to the default business.
  */
-export async function resolveBusinessForCall(call: { to?: string; from?: string }): Promise<BusinessProfile> {
+export async function resolveBusinessForCall(call: {
+  to?: string;
+  from?: string;
+  callSid?: string;
+}): Promise<BusinessProfile> {
   try {
+    if (call.callSid && samePhone(call.from, config.TWILIO_PHONE_NUMBER)) {
+      const cockpitBusinessId = claimCockpitDemo(call.callSid);
+      if (cockpitBusinessId) {
+        const business = await db.business.findUnique({ where: { id: cockpitBusinessId } });
+        if (business) return toProfile(business);
+      }
+    }
+
     if (call.to) {
       const owner = await db.business.findUnique({ where: { twilioNumber: call.to } });
       if (owner) return toProfile(owner);

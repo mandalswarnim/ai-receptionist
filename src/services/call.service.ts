@@ -16,6 +16,7 @@ import { isDialableNumber } from '../lib/phone';
 import { ConversationState, ExtractedCallData } from '../types';
 import { BusinessProfile, profileForCall } from './business.service';
 import { getSheets } from './sheets.service';
+import { takeCockpitCall } from './demo.service';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
 //
@@ -332,8 +333,10 @@ export async function processCompletedCall(
       });
     }
 
-    // 5. Demo calls go in the sales Call Log; Swarnim fills in the outcome
-    if (business.mode === 'DEMO') await logDemoCall(business, state.startedAt, finalData, callId);
+    // 5. Demo calls go in the sales Call Log; Swarnim fills in the outcome.
+    //    Cockpit calls are logged by the cockpit's outcome form instead.
+    const viaCockpit = takeCockpitCall(callSid);
+    if (business.mode === 'DEMO' && !viaCockpit) await logDemoCall(business, state.startedAt, finalData, callId);
 
     logger.info('Call processing complete', {
       callSid,

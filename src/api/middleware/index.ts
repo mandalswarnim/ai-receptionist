@@ -1,7 +1,39 @@
 import { Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'crypto';
+import twilio from 'twilio';
 import { config } from '../../config';
 import { logger } from '../../lib/logger';
+
+// ─── Twilio request validation middleware ────────────────────────────────────
+
+if (config.SKIP_TWILIO_SIGNATURE) {
+  logger.warn('SKIP_TWILIO_SIGNATURE is on — webhooks accept unsigned requests');
+}
+
+export function validateTwilioSignature(req: Request, res: Response, next: NextFunction): void {
+  // Explicit opt-out only (refused in production by config). Validation must
+  // not hinge on NODE_ENV: a deploy that forgets to set it would otherwise
+  // accept forged webhooks.
+  if (config.SKIP_TWILIO_SIGNATURE) {
+    next();
+    return;
+  }
+
+  const isValid = twilio.validateRequest(
+    config.TWILIO_AUTH_TOKEN,
+    req.headers['x-twilio-signature'] as string,
+    `${config.BASE_URL}${req.originalUrl}`,
+    req.body as Record<string, string>
+  );
+
+  if (!isValid) {
+    logger.warn('Invalid Twilio signature', { url: req.originalUrl });
+    res.status(403).send('Forbidden');
+    return;
+  }
+
+  next();
+}
 
 // ─── Admin auth ──────────────────────────────────────────────────────────────
 //

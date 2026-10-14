@@ -6,6 +6,7 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { config } from '../config';
+import { db } from '../lib/db';
 
 const client = new OpenAI({ apiKey: config.OPENAI_API_KEY, timeout: 60_000, maxRetries: 2 });
 
@@ -124,4 +125,22 @@ export async function buildDemoDraft(pubName: string, notes: string): Promise<De
   });
 
   return normalizeDraft(JSON.parse(completion.choices[0]?.message?.content ?? '{}'));
+}
+
+/**
+ * Saves (or updates) a pub's DEMO business. Refuses to touch a LIVE business
+ * with the same slug: that's a real customer.
+ */
+export async function saveDemo(
+  pubName: string,
+  persona: string,
+  draft: DemoDraft
+): Promise<{ slug: string; created: boolean }> {
+  const slug = slugify(pubName);
+  if (!slug) throw new Error(`Can't make a slug from "${pubName}"`);
+  const existing = await db.business.findUnique({ where: { slug } });
+  if (existing?.mode === 'LIVE') throw new Error(`"${slug}" is a LIVE business and won't be overwritten`);
+  const data = { name: pubName, personaName: persona, ...draft };
+  await db.business.upsert({ where: { slug }, create: { slug, mode: 'DEMO', ...data }, update: data });
+  return { slug, created: !existing };
 }
