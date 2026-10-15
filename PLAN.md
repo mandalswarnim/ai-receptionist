@@ -14,6 +14,11 @@ because the demo is the pitch.
 **Not in scope:** the AI dialling prospects by itself, bulk dialling, scraped contact lists,
 paid lead data. Research is done by hand (see `docs/sales/PLAYBOOK.md`).
 
+**Pricing:** £50 one-off setup, then pay per minute of AI-answered calls, on one of four tiers
+(Agathos → Arete → Aristeia → Axiom). Rates are set from pilot costs. Everything needed to sell
+on that basis (dashboard, metering, billing, UK compliance) is in
+[`docs/MARKET-READY-PLAN.md`](docs/MARKET-READY-PLAN.md), which picks up where this plan ends.
+
 Each phase ends with something usable. Do them in order. Tick boxes as tasks are merged.
 
 ---
@@ -138,9 +143,10 @@ one page with no manual dialling or typing into the Sheet.
 
 - [ ] Daily 08:30 email digest (reuse `email.service`): follow-ups due today, callbacks, trials
       ending in the next 3 days. Read from the Sheet.
-- [ ] "Start trial" in the cockpit: copies the DEMO business to a LIVE business, asks for
-      notify email and the pub's forwarding setup, assigns a Twilio number, and adds/updates the
-      `Leads` row (Stage = Trial live, Trial start = today).
+- [ ] "Start trial" in the cockpit: copies the DEMO business to a LIVE business, asks for the
+      tier (Agathos / Arete / Aristeia / Axiom), notify email, manager phone(s) and the pub's
+      forwarding setup, assigns a Twilio number, records the £50 setup fee, and adds/updates the
+      `Leads` row (Stage = Trial live, Plan = tier, Trial start = today).
 - [ ] One-page "how to forward your missed calls" instructions per UK network, emailed on trial start.
 - [ ] Optional: `scripts/fsa-pubs.ts <local authority>` pulls pub names and addresses from the
       Food Standards Agency hygiene-rating API (free, no key) into a CSV for pasting into
@@ -151,11 +157,12 @@ into a working trial takes under 10 minutes.
 
 ---
 
-## Later (only after paying customers)
+## After Phase 4
 
-- Booking-system integrations (ResDiary, Collins) so demo and live calls make real bookings.
-- Per-customer dashboard on the website.
-- Inbound "hear your demo" line on the marketing site and flyers.
+Continue with [`docs/MARKET-READY-PLAN.md`](docs/MARKET-READY-PLAN.md): bookings and instant SMS
+in the live product, safe failure and monitoring, UK compliance, tiers, usage metering, the
+customer dashboard and billing. Still later: booking-system integrations (Axiom) and an inbound
+"hear your demo" line on the marketing site and flyers.
 
 ## Environment variables to add (as phases land)
 

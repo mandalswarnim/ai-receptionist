@@ -13,6 +13,18 @@ in a demo receptionist that answers as *that pub*, so the owner hears exactly wh
 their callers would get. Read `PLAN.md` before starting any feature work; it is the
 source of truth for scope and order. Sales process and call script live in
 `docs/sales/PLAYBOOK.md`. How the pieces fit together: `docs/ARCHITECTURE.md`.
+The path to a sellable, UK-compliant product (pricing, tiers, compliance, dashboard,
+billing) is `docs/MARKET-READY-PLAN.md`.
+
+## Pricing model
+
+- **£50 one-off setup**, then **pay per minute** of AI-answered calls, billed monthly. No
+  subscription. Per-minute rates are not set yet (measured from pilot costs).
+- Four tiers, cheapest first: **Agathos → Arete → Aristeia → Axiom**. Feature split is in
+  `docs/MARKET-READY-PLAN.md` ("The four tiers"). Use these exact names in code
+  (`AGATHOS | ARETE | ARISTEIA | AXIOM`), copy and the sheet.
+- Customers get a dashboard login showing calls, minutes and the running monthly bill.
+- Never bill demo calls, test calls, or calls where the caller never spoke.
 
 ## Stack
 
@@ -102,7 +114,8 @@ Dropdown values (must match exactly):
 - Prospects Status: Not called, Calling, Callback, Demo done, Lead, Not interested, Do not call
 - Call Log Outcome: No answer, Gatekeeper, Call back later, Interested, Not interested, Asked not to be called
 - Leads Stage: Interested, Trial offered, Trial live, Paying, Lost
-- Leads Plan: Starter £69, Pro £129, Group
+- Leads Plan: Agathos, Arete, Aristeia, Axiom
+- Leads "Monthly value (£)" is an *estimated* monthly bill (setup excluded) while pricing is usage-based
 
 Access from code is via a Google Cloud service account that the sheet is shared with
 (PLAN.md Phase 2). Append rows; never reorder or delete the user's rows.

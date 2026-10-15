@@ -91,7 +91,7 @@ Get the email. Log as `Interested`, add a `Leads` row with Stage `Trial offered`
 |---|---|
 | "We don't miss calls." | "Most places think that. Fridays at 8pm when the bar's three deep, who answers? Try it free for two weeks and the summary emails will tell you." |
 | "Customers want a real person." | "So do I, which is why it only picks up when your team can't. Better than ringing out. It also tells callers it's an assistant." |
-| "How much?" | "From £69 a month after the free trial. One extra table of four on a Saturday covers that." |
+| "How much?" | "£50 to set it up, then you only pay for the calls it actually answers, by the minute. No monthly fee, and you can see every call and your bill in your own dashboard. One extra table of four on a Saturday covers a lot of minutes." (Once pilot data is in, add: "A typical pub pays about £X a month.") |
 | "Send me an email." | "Will do. What's the best address? And while I've got you, can I give you 60 seconds on the demo so the email makes sense?" |
 | "We use ResDiary already." | "Great, people can book online, but plenty still ring. This catches those calls and takes the booking details for you." |
 | "Not interested." | "No problem. Shall I take you off my list?" If yes, add to `Do Not Call`. |
