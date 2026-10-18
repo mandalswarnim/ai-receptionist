@@ -16,6 +16,7 @@ import { logger } from '../../lib/logger';
 import { requireAdminKey } from '../middleware';
 import { DEFAULT_BUSINESS_SLUG, toProfile } from '../../services/business.service';
 import { clearActiveDemo, getActiveDemo } from '../../services/demo.service';
+import { EVENT_TYPE_URI } from '../../services/calendly.service';
 
 const router = Router();
 router.use(requireAdminKey);
@@ -35,6 +36,12 @@ const fieldsSchema = z.object({
   faqs: z.array(z.object({ q: z.string().trim().min(1), a: z.string().trim().min(1) })).max(50),
   notifyEmail: z.string().trim().email().nullable().optional(),
   twilioNumber: z.string().regex(/^\+\d{7,15}$/, 'E.164, e.g. +447700900123').nullable().optional(),
+  calendlyEventType: z
+    .string()
+    .trim()
+    .regex(EVENT_TYPE_URI, 'Calendly event type URI, e.g. https://api.calendly.com/event_types/AAAA')
+    .nullable()
+    .optional(),
 });
 
 const createSchema = fieldsSchema

@@ -52,6 +52,7 @@ const row = (over: Record<string, unknown>) => ({
   faqs: [],
   notifyEmail: null,
   twilioNumber: null,
+  calendlyEventType: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   ...over,

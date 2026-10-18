@@ -14,6 +14,7 @@
     "db:seed": "ts-node scripts/seed-default-business.ts",
     "demo:new": "ts-node scripts/new-demo.ts",
     "sheets:check": "ts-node scripts/check-sheets.ts",
+    "calendly:event-types": "ts-node scripts/calendly-event-types.ts",
     "lint": "eslint src tests scripts",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run",

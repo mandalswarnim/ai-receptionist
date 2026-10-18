@@ -43,6 +43,9 @@ model Business {
   faqs                Json         @default("[]") // [{ q, a }]
   notifyEmail         String?
   twilioNumber        String?      @unique
+  // Calendly event type the receptionist books callers into, e.g.
+  // https://api.calendly.com/event_types/AAAA (npm run calendly:event-types)
+  calendlyEventType   String?
 
   calls Call[]
 

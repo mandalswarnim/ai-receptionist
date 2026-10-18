@@ -16,6 +16,7 @@ import { END_CALL_TOKEN, SentinelFilter } from '../lib/sentinel';
 import { normalizeUrgency, URGENCY_VALUES } from '../lib/urgency';
 import { isDialableNumber } from '../lib/phone';
 import type { BusinessProfile } from './business.service';
+import * as appointmentSvc from './appointment.service';
 
 export { END_CALL_TOKEN, normalizeUrgency };
 
@@ -90,13 +91,21 @@ ${WRAP_UP_RULE}`;
  * DEMO: answers as a prospect pub, so the owner hears exactly what their
  * callers would get — bookings, questions about the place, and messages.
  */
-function buildDemoPrompt(business: BusinessProfile, callerNumber: string, keypadLine: string): string {
+function buildDemoPrompt(
+  business: BusinessProfile,
+  callerNumber: string,
+  keypadLine: string,
+  appointmentsOn: boolean
+): string {
+  const bookingLine = appointmentsOn
+    ? `- Booking: use the diary, as set out under "Booking appointments" below. ${phoneInstruction(callerNumber)}`
+    : `- Booking a table: get their name, how many people, the date and the time, then the best number to reach them. ${phoneInstruction(callerNumber)} Read the booking back in one sentence and confirm it with "I've pencilled that in, the team will confirm by text." Never say a booking is guaranteed or check availability — you can't see the diary.`;
   return `You are ${business.personaName}, the AI assistant who answers the phone for ${business.name}. You're speaking on a live phone call and your words are read aloud by text-to-speech. Use British English.${knowledgeBlock(business)}
 
 ${HOW_YOU_SPEAK}${keypadLine}
 
 What callers usually want, and how to handle it:
-- Booking a table: get their name, how many people, the date and the time, then the best number to reach them. ${phoneInstruction(callerNumber)} Read the booking back in one sentence and confirm it with "I've pencilled that in, the team will confirm by text." Never say a booking is guaranteed or check availability — you can't see the diary.
+${bookingLine}
 - Questions about the place (hours, food, parking, dogs, events): answer from what you know above. If it isn't there, say you'll get the team to come back to them, and take their name and number.
 - Anything else: take a message with their name, best number, and what it's about.
 
@@ -107,16 +116,21 @@ Ground rules:
 ${WRAP_UP_RULE}`;
 }
 
+/**
+ * `appointmentsOn` is true only where the booking tools are offered (the
+ * streaming relay loop); the prompt's booking section is added by the caller.
+ */
 export function buildSystemPrompt(
   business: BusinessProfile,
   callerNumber: string,
-  keypadAvailable: boolean
+  keypadAvailable: boolean,
+  appointmentsOn = false
 ): string {
   const keypadLine = keypadAvailable
     ? `\n- Numbers are easy to mishear over the phone. When you ask for a phone number, offer the keypad: "or you can type it on your keypad and press hash". Text in [square brackets] from the caller is keypad input, not speech — treat it as exact.`
     : '';
   return business.mode === 'DEMO'
-    ? buildDemoPrompt(business, callerNumber, keypadLine)
+    ? buildDemoPrompt(business, callerNumber, keypadLine, appointmentsOn)
     : buildLivePrompt(business, callerNumber, keypadLine);
 }
 
@@ -284,6 +298,9 @@ Only include extracted fields that were mentioned in the caller's latest message
 
 // ─── Relay mode: streaming plain-text response ───────────────────────────────
 
+/** Tool rounds allowed in one reply (e.g. check availability, then book). */
+const MAX_TOOL_ROUNDS = 3;
+
 /**
  * Streams a conversational reply token by token. The caller's latest
  * utterance must already be the last entry in state.turns. Calls onToken for
@@ -298,34 +315,75 @@ export async function streamResponse(
   onToken: (token: string) => void,
   signal?: AbortSignal
 ): Promise<{ fullText: string; endCall: boolean }> {
+  const appointmentsOn = appointmentSvc.appointmentsEnabled(state.business);
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     {
       role: 'system',
       content:
-        buildSystemPrompt(state.business, state.from, true) +
+        buildSystemPrompt(state.business, state.from, true, appointmentsOn) +
+        (appointmentsOn ? appointmentSvc.promptSection(state) : '') +
         `\n\nReply with plain conversational text only. Only when the caller has confirmed there's nothing else and you have said goodbye, append the exact token ${END_CALL_TOKEN} at the very end of your reply.`,
     },
     ...historyMessages(state),
   ];
 
-  const stream = await liveClient.chat.completions.create(
-    {
-      model: config.OPENAI_MODEL,
-      messages,
-      temperature: 0.6,
-      max_tokens: 200,
-      stream: true,
-    },
-    { signal }
-  );
-
   const filter = new SentinelFilter(onToken);
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta?.content ?? '';
-    if (!filter.push(delta)) {
-      stream.controller.abort();
-      break;
+  // Each round streams the model's reply; a round that ends in tool calls
+  // runs them and streams again, so "let me check the diary" is spoken while
+  // the check runs. The last round may not call tools, so the caller always
+  // hears an answer.
+  for (let round = 1; ; round++) {
+    const toolsAllowed = appointmentsOn && round <= MAX_TOOL_ROUNDS;
+    const stream = await liveClient.chat.completions.create(
+      {
+        model: config.OPENAI_MODEL,
+        messages,
+        temperature: 0.6,
+        max_tokens: 200,
+        stream: true,
+        ...(appointmentsOn
+          ? { tools: appointmentSvc.TOOLS, tool_choice: toolsAllowed ? ('auto' as const) : ('none' as const), parallel_tool_calls: false }
+          : {}),
+      },
+      { signal }
+    );
+
+    let roundText = '';
+    const calls: Array<{ id: string; name: string; args: string }> = [];
+    let sawSentinel = false;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      const text = delta?.content ?? '';
+      roundText += text;
+      if (!filter.push(text)) {
+        sawSentinel = true;
+        stream.controller.abort();
+        break;
+      }
+      for (const tc of delta?.tool_calls ?? []) {
+        const call = (calls[tc.index] ??= { id: '', name: '', args: '' });
+        if (tc.id) call.id = tc.id;
+        if (tc.function?.name) call.name += tc.function.name;
+        if (tc.function?.arguments) call.args += tc.function.arguments;
+      }
     }
+
+    if (sawSentinel || calls.length === 0 || !toolsAllowed) break;
+
+    messages.push({
+      role: 'assistant',
+      content: roundText || null,
+      tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.args } })),
+    });
+    for (const call of calls) {
+      // Not cancelled on barge-in: a booking that went through must be
+      // recorded on the session, or the next turn wouldn't know about it.
+      const result = await appointmentSvc.runTool(state, call.name, call.args);
+      messages.push({ role: 'tool', tool_call_id: call.id, content: result });
+    }
+    if (signal?.aborted) break;
+    // Keep the words of the two rounds apart when spoken
+    if (roundText && !/\s$/.test(roundText)) filter.push(' ');
   }
   filter.end();
 

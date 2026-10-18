@@ -125,6 +125,11 @@ const configSchema = z.object({
   GOOGLE_SHEETS_ID: z.string().min(1).optional(),
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional(),
 
+  // Calendly appointment booking. A personal access token from the Calendly
+  // account (paid plan) that owns the event types businesses book into. Without
+  // it, no business offers appointments and calls take a message as before.
+  CALENDLY_API_TOKEN: z.string().min(1).optional(),
+
   // Optional
   SLACK_WEBHOOK_URL: z.string().url().optional(),
   ALERT_SMS_NUMBER: z.string().startsWith('+').optional(),

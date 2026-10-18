@@ -35,6 +35,23 @@ export interface ConversationState {
   startedAt: Date;
   /** Consecutive turns where the caller said nothing (webhook mode). */
   silentPrompts: number;
+  /** Calendly booking progress, when the business takes appointments. */
+  appointment?: AppointmentState;
+}
+
+export interface AppointmentState {
+  /** Start times (ISO, UTC) the diary last offered; only these can be booked. */
+  offered: string[];
+  booked?: {
+    startTime: string;
+    /** The time as said to the caller, in the business's timezone. */
+    label: string;
+    name: string;
+    email: string;
+    eventUri: string;
+  };
+  /** Number a booking link was texted to, at most once per call. */
+  linkTextedTo?: string;
 }
 
 export interface ExtractedCallData {

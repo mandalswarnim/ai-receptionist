@@ -31,6 +31,7 @@ const LIVE: BusinessProfile = {
   menuNotes: null,
   faqs: [],
   notifyEmail: 'owner@acme.test',
+  calendlyEventType: null,
 };
 
 const DEMO: BusinessProfile = {
@@ -47,6 +48,7 @@ const DEMO: BusinessProfile = {
   menuNotes: 'Sunday roasts served 12–5pm. Vegan options on every menu.',
   faqs: [{ q: 'Are dogs allowed?', a: 'Yes, in the bar and garden.' }],
   notifyEmail: 'landlord@thecrown.test',
+  calendlyEventType: null,
 };
 
 // 2pm in London (BST)
@@ -70,6 +72,12 @@ describe('system prompt', () => {
     expect(prompt).toContain('Opening hours: Mon–Thu');
     expect(prompt).toContain('Q: Are dogs allowed? A: Yes, in the bar and garden.');
     expect(prompt).toContain("when the team can't get to the phone");
+  });
+
+  it('DEMO with appointments on books through the diary instead of pencilling in', () => {
+    const prompt = buildSystemPrompt(DEMO, '+447700900123', true, true);
+    expect(prompt).toContain('Booking: use the diary');
+    expect(prompt).not.toContain('pencilled');
   });
 
   it('DEMO takes bookings and confirms them as pencilled in', () => {

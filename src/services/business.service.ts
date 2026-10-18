@@ -32,6 +32,8 @@ export interface BusinessProfile {
   menuNotes: string | null;
   faqs: Faq[];
   notifyEmail: string | null;
+  /** Calendly event type callers can book into, when appointments are on. */
+  calendlyEventType: string | null;
 }
 
 const faqsSchema = z.array(z.object({ q: z.string(), a: z.string() })).catch([]);
@@ -51,6 +53,7 @@ export function toProfile(business: Business): BusinessProfile {
     menuNotes: business.menuNotes,
     faqs: faqsSchema.parse(business.faqs),
     notifyEmail: business.notifyEmail,
+    calendlyEventType: business.calendlyEventType,
   };
 }
 
@@ -88,6 +91,7 @@ export function envFallbackProfile(): BusinessProfile {
     menuNotes: null,
     faqs: [],
     notifyEmail: config.BUSINESS_EMAIL,
+    calendlyEventType: null,
   };
 }
 

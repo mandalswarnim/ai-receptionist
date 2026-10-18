@@ -17,6 +17,7 @@ import { ConversationState, ExtractedCallData } from '../types';
 import { BusinessProfile, profileForCall } from './business.service';
 import { getSheets } from './sheets.service';
 import { takeCockpitCall } from './demo.service';
+import { summaryLine as appointmentSummaryLine } from './appointment.service';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
 //
@@ -245,13 +246,16 @@ export async function processCompletedCall(
       logger.error('Extraction failed — falling back to raw transcript', { callSid, err });
     }
 
-    // Seed with what the conversation service already collected
+    // Seed with what the conversation service already collected. A booking
+    // made on the call is stated as fact, not left to extraction.
+    const appointmentLine = appointmentSummaryLine(state);
+    const withAppointment = (text: string) => (appointmentLine ? `${appointmentLine} ${text}`.trim() : text);
     const finalData: ExtractedCallData = {
       name: extractedData.name || state.collectedInfo.name || '',
       company: extractedData.company || state.collectedInfo.company || '',
       phone: extractedData.phone || state.collectedInfo.phone || (isDialableNumber(state.from) ? state.from : ''),
       email: extractedData.email || state.collectedInfo.email || '',
-      message: extractedData.message || state.collectedInfo.message || '',
+      message: withAppointment(extractedData.message || state.collectedInfo.message || ''),
       urgency: normalizeUrgency(extractedData.urgency || state.collectedInfo.urgency),
       summary: extractionFailed
         ? fallbackSummary(audioTranscript ?? liveTranscript)

@@ -16,6 +16,7 @@ const LIVE_BUSINESS: BusinessProfile = {
   menuNotes: null,
   faqs: [],
   notifyEmail: 'owner@acme.test',
+  calendlyEventType: null,
 };
 
 const mocks = vi.hoisted(() => ({
@@ -176,6 +177,23 @@ describe('processCompletedCall', () => {
     expect(mocks.upsert).toHaveBeenCalledTimes(1);
     expect(mocks.upsert.mock.calls[0][0].update.status).toBe('COMPLETED');
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('states an appointment booked on the call at the top of the message', async () => {
+    const booked = {
+      startTime: '2026-10-20T13:00:00.000Z',
+      label: 'Tuesday 20 October at 2:00 pm',
+      name: 'James Smith',
+      email: 'james@example.com',
+      eventUri: 'https://api.calendly.com/scheduled_events/EV1',
+    };
+
+    await processCompletedCall({ ...state(), appointment: { offered: [], booked } });
+
+    expect(mocks.sendEmail.mock.calls[0][0].message).toBe(
+      'Appointment booked in Calendly for Tuesday 20 October at 2:00 pm (James Smith, james@example.com). ' +
+        'James is calling about his invoice.'
+    );
   });
 
   it('links the call to its business and emails for that business', async () => {

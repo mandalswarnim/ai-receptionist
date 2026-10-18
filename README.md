@@ -319,6 +319,37 @@ On the server (in this order):
       answer the second phone → Bring in demo → hear "Good afternoon, …" → Hang up → log it
 - [ ] Ring the Twilio number from another phone: it still answers as your normal business
 
+## Calendly Appointments
+
+Any business can let callers book an appointment straight into a Calendly calendar
+during the call. Maya checks the diary, offers two or three open times, takes the
+caller's name and email (spelt out and read back), confirms the time, and books it.
+Calendly emails the caller a confirmation. If the caller won't give an email, or
+nothing suits, Maya texts them the booking link instead. The summary email starts
+with the booking ("Appointment booked in Calendly for Tuesday 20 October at 2:00 pm …").
+
+Setup:
+
+1. The Calendly account needs a paid plan (Standard or higher) to use the Scheduling API.
+   Create a personal access token under *Integrations → API & Webhooks* and set
+   `CALENDLY_API_TOKEN`.
+2. `npm run calendly:event-types` lists the event types and their URIs.
+3. Set one on the business:
+   `PATCH /api/businesses/<slug> { "calendlyEventType": "https://api.calendly.com/event_types/…" }`
+   (`null` turns it off again).
+
+Notes:
+
+- Only the streaming (ConversationRelay) path books appointments. The Gather fallback still
+  takes a message.
+- Times are given in `COMPANY_TIMEZONE`.
+- Event types whose location the caller would have to type in (`ask_invitee`) can't be booked
+  by phone. Maya offers the text link for those. "We'll call you" events (`outbound_call`) use
+  the caller's number.
+- Texting the link sends an SMS from `TWILIO_PHONE_NUMBER`, so that number must be able to send SMS.
+- One token covers one Calendly organisation. Businesses on their own Calendly accounts will
+  need OAuth (not built yet).
+
 ## API Endpoints
 
 ### Admin
@@ -408,6 +439,7 @@ The email includes:
 | `COMPANY_TIMEZONE` | No       | Default: `UTC`                               |
 | `SLACK_WEBHOOK_URL`| No       | Slack notifications (optional)               |
 | `ALERT_SMS_NUMBER` | No       | SMS alert for urgent calls (optional)        |
+| `CALENDLY_API_TOKEN` | No     | Calendly booking on calls (see Calendly Appointments) |
 | `AGENT_PHONE_NUMBER` | No     | Your mobile: the cockpit rings it; an active demo only answers calls from it |
 | `CALLING_HOURS`    | No       | When the cockpit may dial prospects (UK time). Default `Mon-Fri 09:00-20:00; Sat 10:00-17:00` |
 | `RECORD_SALES_CALLS` | No     | `true` adds a Record button to the cockpit. Default `false` |

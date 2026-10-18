@@ -197,6 +197,11 @@ export async function endCall(callSid: string): Promise<void> {
   }
 }
 
+/** Texts a caller from our Twilio number. */
+export async function sendSms(to: string, body: string): Promise<void> {
+  await twilioClient.messages.create({ to, from: config.TWILIO_PHONE_NUMBER, body });
+}
+
 /**
  * Sends an SMS alert for urgent calls.
  */
