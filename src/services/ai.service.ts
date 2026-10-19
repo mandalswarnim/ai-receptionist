@@ -399,7 +399,10 @@ function partOfDay(now: Date): 'morning' | 'afternoon' | 'evening' {
   return hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
 }
 
-export function buildGreeting(business: BusinessProfile, now: Date = new Date()): string {
+export function buildGreeting(
+  business: Pick<BusinessProfile, 'mode' | 'name' | 'personaName' | 'greeting'>,
+  now: Date = new Date()
+): string {
   const disclosure = config.RECORD_CALLS
     ? ' Just to let you know, this call may be recorded.'
     : '';

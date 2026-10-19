@@ -50,6 +50,10 @@ const BUSINESS: BusinessProfile = {
   faqs: [],
   notifyEmail: 'owner@acme.test',
   calendlyEventType: EVENT_TYPE,
+  tier: 'AGATHOS',
+  notifyChannel: 'EMAIL',
+  whatsappNumbers: [],
+  whatsappOptInAt: null,
 };
 
 // Sunday 18 October 2026, 10:00 in London (BST)

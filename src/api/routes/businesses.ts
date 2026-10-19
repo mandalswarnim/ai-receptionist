@@ -6,10 +6,15 @@
  * POST   /api/businesses          — Create a business (DEMO by default)
  * PATCH  /api/businesses/:slug    — Update a business
  * DELETE /api/businesses/:slug    — Delete a business (its calls are kept)
+ *
+ * WhatsApp summaries: set `whatsappNumbers`, `whatsappOptIn: true` (the
+ * business has agreed to WhatsApp messages) and `notifyChannel` WHATSAPP or
+ * BOTH. Only on tiers that include it. Changing the numbers without
+ * `whatsappOptIn: true` clears the opt-in.
  */
 
 import { Router, Request, Response } from 'express';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Tier } from '@prisma/client';
 import { z } from 'zod';
 import { db } from '../../lib/db';
 import { logger } from '../../lib/logger';
@@ -17,6 +22,7 @@ import { requireAdminKey } from '../middleware';
 import { DEFAULT_BUSINESS_SLUG, toProfile } from '../../services/business.service';
 import { clearActiveDemo, getActiveDemo } from '../../services/demo.service';
 import { EVENT_TYPE_URI } from '../../services/calendly.service';
+import { hasFeature, TIERS, tiersWith } from '../../lib/tiers';
 
 const router = Router();
 router.use(requireAdminKey);
@@ -42,6 +48,15 @@ const fieldsSchema = z.object({
     .regex(EVENT_TYPE_URI, 'Calendly event type URI, e.g. https://api.calendly.com/event_types/AAAA')
     .nullable()
     .optional(),
+  tier: z.enum(TIERS as [Tier, ...Tier[]]).optional(),
+  notifyChannel: z.enum(['EMAIL', 'WHATSAPP', 'BOTH']).optional(),
+  whatsappNumbers: z
+    .array(z.string().regex(/^\+\d{7,15}$/, 'E.164, e.g. +447700900123'))
+    .max(5)
+    .transform((nums) => [...new Set(nums)])
+    .optional(),
+  /** true records the business's WhatsApp opt-in now; false withdraws it. */
+  whatsappOptIn: z.boolean().optional(),
 });
 
 const createSchema = fieldsSchema
@@ -52,17 +67,46 @@ const updateSchema = fieldsSchema.partial();
 
 type Fields = z.infer<typeof updateSchema>;
 
+/** The business as it would be after the change, for checkRules(). */
+type Merged = Omit<Fields, 'whatsappOptIn'> & { whatsappOptInAt?: Date | null };
+
+/**
+ * Request fields → database fields. The opt-in is stored as a time; new
+ * numbers without a fresh opt-in clear it, as those people haven't agreed.
+ */
+export function toData<T extends Fields>(
+  fields: T,
+  existing?: { whatsappNumbers: string[] }
+): Omit<T, 'whatsappOptIn'> & { whatsappOptInAt?: Date | null } {
+  const { whatsappOptIn, ...data } = fields;
+  const numbersChanged =
+    data.whatsappNumbers !== undefined &&
+    data.whatsappNumbers.join() !== (existing?.whatsappNumbers ?? []).join();
+  let whatsappOptInAt: Date | null | undefined;
+  if (whatsappOptIn === true) whatsappOptInAt = new Date();
+  else if (whatsappOptIn === false || numbersChanged) whatsappOptInAt = null;
+  return whatsappOptInAt === undefined ? data : { ...data, whatsappOptInAt };
+}
+
 /**
  * Rules that protect the live missed-call path. Returns an error message or
  * undefined. `merged` is the business as it would be after the change.
  */
-function checkRules(slug: string, merged: Fields): string | undefined {
+export function checkRules(slug: string, merged: Merged): string | undefined {
   if (slug === DEFAULT_BUSINESS_SLUG && merged.mode === 'DEMO') {
     return 'The default business answers real forwarded calls and must stay LIVE';
   }
   // A demo that owned a number would answer every call to it, indefinitely
   if (merged.mode === 'DEMO' && merged.twilioNumber) {
     return 'DEMO businesses cannot own a Twilio number; set them active with /api/demo/active instead';
+  }
+  if (merged.notifyChannel && merged.notifyChannel !== 'EMAIL') {
+    if (merged.mode === 'DEMO') return 'Demo call summaries are only emailed';
+    if (!hasFeature(merged.tier ?? 'AGATHOS', 'whatsappAlerts')) {
+      return `WhatsApp summaries are on ${tiersWith('whatsappAlerts')}; this business is on ${merged.tier ?? 'AGATHOS'}`;
+    }
+    if (!merged.whatsappNumbers?.length) return 'Add whatsappNumbers before choosing WhatsApp';
+    if (!merged.whatsappOptInAt) return 'Record the business\'s WhatsApp opt-in first (whatsappOptIn: true)';
   }
   return undefined;
 }
@@ -110,7 +154,7 @@ router.post('/', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid business', issues: parsed.error.issues });
     return;
   }
-  const data = { mode: 'DEMO' as const, personaName: 'Maya', faqs: [], ...parsed.data };
+  const data = { mode: 'DEMO' as const, personaName: 'Maya', faqs: [], ...toData(parsed.data) };
   const ruleError = checkRules(data.slug, data);
   if (ruleError) {
     res.status(400).json({ error: ruleError });
@@ -138,15 +182,24 @@ router.patch('/:slug', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'Business not found' });
       return;
     }
+    const data: Prisma.BusinessUpdateInput = toData(parsed.data, existing);
+    const tier = parsed.data.tier ?? existing.tier;
+    // Moving to a tier without WhatsApp goes back to email, unless the
+    // request asks for WhatsApp itself (which checkRules then refuses)
+    if (!hasFeature(tier, 'whatsappAlerts') && parsed.data.notifyChannel === undefined) data.notifyChannel = 'EMAIL';
     const ruleError = checkRules(slug, {
       mode: parsed.data.mode ?? existing.mode,
       twilioNumber: parsed.data.twilioNumber === undefined ? existing.twilioNumber : parsed.data.twilioNumber,
+      tier,
+      notifyChannel: (data.notifyChannel as Fields['notifyChannel']) ?? existing.notifyChannel,
+      whatsappNumbers: parsed.data.whatsappNumbers ?? existing.whatsappNumbers,
+      whatsappOptInAt: 'whatsappOptInAt' in data ? (data.whatsappOptInAt as Date | null) : existing.whatsappOptInAt,
     });
     if (ruleError) {
       res.status(400).json({ error: ruleError });
       return;
     }
-    const business = await db.business.update({ where: { slug }, data: parsed.data });
+    const business = await db.business.update({ where: { slug }, data });
     logger.info('Business updated', { slug, fields: Object.keys(parsed.data) });
     res.json(business);
   } catch (err) {

@@ -64,6 +64,10 @@ const BUSINESS: BusinessProfile = {
   faqs: [],
   notifyEmail: null,
   calendlyEventType: 'https://api.calendly.com/event_types/ABC',
+  tier: 'AGATHOS',
+  notifyChannel: 'EMAIL',
+  whatsappNumbers: [],
+  whatsappOptInAt: null,
 };
 
 const STATE: ConversationState = {

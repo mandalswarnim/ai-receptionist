@@ -26,6 +26,21 @@ enum BusinessMode {
   LIVE
 }
 
+// Pricing tiers, cheapest first. Features per tier: src/lib/tiers.ts
+enum Tier {
+  AGATHOS
+  ARETE
+  ARISTEIA
+  AXIOM
+}
+
+// Where call summaries go. WhatsApp needs a tier that includes it.
+enum NotifyChannel {
+  EMAIL
+  WHATSAPP
+  BOTH
+}
+
 // A business the receptionist answers for. LIVE businesses are real
 // customers; DEMO businesses are prospects used on sales calls.
 model Business {
@@ -46,6 +61,10 @@ model Business {
   // Calendly event type the receptionist books callers into, e.g.
   // https://api.calendly.com/event_types/AAAA (npm run calendly:event-types)
   calendlyEventType   String?
+  tier                Tier          @default(AGATHOS)
+  notifyChannel       NotifyChannel @default(EMAIL)
+  whatsappNumbers     String[]      @default([]) // E.164 manager numbers
+  whatsappOptInAt     DateTime?     // when the business agreed to WhatsApp messages
 
   calls Call[]
 
@@ -82,6 +101,7 @@ model Call {
   // Email notification
   emailSent     Boolean  @default(false)
   emailSentAt   DateTime?
+  whatsappSentAt DateTime?
 
   // Conversation turns
   turns         ConversationTurn[]

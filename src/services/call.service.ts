@@ -18,6 +18,7 @@ import { BusinessProfile, profileForCall } from './business.service';
 import { getSheets } from './sheets.service';
 import { takeCockpitCall } from './demo.service';
 import { summaryLine as appointmentSummaryLine } from './appointment.service';
+import { sendWhatsAppSummary, summaryChannels } from './whatsapp.service';
 
 // ─── Recording hand-off ──────────────────────────────────────────────────────
 //
@@ -145,12 +146,21 @@ function sendEmailWithRetry(
   });
 }
 
+function sendWhatsAppWithRetry(data: ExtractedCallData, callSid: string, business: BusinessProfile): Promise<void> {
+  return withRetry(() => sendWhatsAppSummary(data, callSid, business), {
+    attempts: 2,
+    baseDelayMs: 2000,
+    onRetry: (err, attempt) => logger.warn('WhatsApp summary failed — retrying', { callSid, attempt, err }),
+  });
+}
+
 // ─── Email resend sweep ──────────────────────────────────────────────────────
 //
 // Calls whose summary email never went out (SMTP down, server restarted
 // mid-retry...) are resent here. Silent calls have no summary, so they are
 // never picked up. The age window skips calls still being processed and
-// stops very old messages from suddenly being delivered.
+// stops very old messages from suddenly being delivered. A summary that
+// went by WhatsApp only is not emailed again.
 
 const RESEND_MIN_AGE_MS = 5 * 60_000;
 const RESEND_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
@@ -162,6 +172,7 @@ export async function resendPendingEmails(): Promise<void> {
       status: 'COMPLETED',
       emailSent: false,
       summary: { not: null },
+      OR: [{ whatsappSentAt: null }, { business: { notifyChannel: 'BOTH' } }],
       endedAt: { lt: new Date(now - RESEND_MIN_AGE_MS), gt: new Date(now - RESEND_MAX_AGE_MS) },
     },
     orderBy: { endedAt: 'asc' },
@@ -309,9 +320,13 @@ export async function processCompletedCall(
       logger.error('Failed to save call — sending email anyway', { callSid, err, finalData });
     }
 
-    // 4. Notify — email is the deliverable; Slack/SMS run alongside it
-    const [emailResult] = await Promise.allSettled([
-      sendEmailWithRetry(finalData, callSid, state.startedAt, business),
+    // 4. Notify. The summary is the deliverable: it goes by email, WhatsApp
+    //    or both (by tier and the business's choice), and if WhatsApp alone
+    //    fails it is emailed instead. Slack/SMS run alongside.
+    const channels = summaryChannels(business);
+    const [emailFirst, whatsappResult] = await Promise.allSettled([
+      channels.email ? sendEmailWithRetry(finalData, callSid, state.startedAt, business) : Promise.resolve(),
+      channels.whatsapp ? sendWhatsAppWithRetry(finalData, callSid, business) : Promise.resolve(),
       sendSlackNotification(finalData, callSid, state.startedAt, business).catch((err) =>
         logger.error('Slack notification error', { err })
       ),
@@ -322,7 +337,20 @@ export async function processCompletedCall(
         : Promise.resolve(),
     ]);
 
-    if (emailResult.status === 'rejected') {
+    const whatsappSent = channels.whatsapp && whatsappResult.status === 'fulfilled';
+    if (channels.whatsapp && !whatsappSent) {
+      logger.error('WhatsApp summary failed after retries', {
+        callSid,
+        err: whatsappResult.status === 'rejected' ? whatsappResult.reason : undefined,
+        fallback: channels.email ? 'email already sent' : 'emailing instead',
+      });
+    }
+    const emailWanted = channels.email || !whatsappSent;
+    const [emailResult] = channels.email || !emailWanted
+      ? [emailFirst]
+      : await Promise.allSettled([sendEmailWithRetry(finalData, callSid, state.startedAt, business)]);
+
+    if (emailWanted && emailResult.status === 'rejected') {
       // The record stays COMPLETED with emailSent=false; resendPendingEmails()
       // picks it up on the next sweep.
       logger.error('Call summary email failed after retries — queued for resend', {
@@ -330,11 +358,13 @@ export async function processCompletedCall(
         err: emailResult.reason,
         ...(saved ? {} : { finalData }),
       });
-    } else if (saved) {
-      await db.call.update({
-        where: { callSid },
-        data: { emailSent: true, emailSentAt: new Date() },
-      });
+    }
+    const delivered = {
+      ...(emailWanted && emailResult.status === 'fulfilled' ? { emailSent: true, emailSentAt: new Date() } : {}),
+      ...(whatsappSent ? { whatsappSentAt: new Date() } : {}),
+    };
+    if (saved && Object.keys(delivered).length) {
+      await db.call.update({ where: { callSid }, data: delivered });
     }
 
     // 5. Demo calls go in the sales Call Log; Swarnim fills in the outcome.
@@ -347,7 +377,8 @@ export async function processCompletedCall(
       urgency: finalData.urgency,
       usedAudioTranscript: !!audioTranscript,
       extractionFailed,
-      emailSent: emailResult.status === 'fulfilled',
+      emailSent: emailWanted && emailResult.status === 'fulfilled',
+      whatsappSent,
       totalMs: Date.now() - startedProcessing,
     });
   } catch (err) {

@@ -32,6 +32,10 @@ const LIVE: BusinessProfile = {
   faqs: [],
   notifyEmail: 'owner@acme.test',
   calendlyEventType: null,
+  tier: 'AGATHOS',
+  notifyChannel: 'EMAIL',
+  whatsappNumbers: [],
+  whatsappOptInAt: null,
 };
 
 const DEMO: BusinessProfile = {
@@ -49,6 +53,10 @@ const DEMO: BusinessProfile = {
   faqs: [{ q: 'Are dogs allowed?', a: 'Yes, in the bar and garden.' }],
   notifyEmail: 'landlord@thecrown.test',
   calendlyEventType: null,
+  tier: 'AGATHOS',
+  notifyChannel: 'EMAIL',
+  whatsappNumbers: [],
+  whatsappOptInAt: null,
 };
 
 // 2pm in London (BST)

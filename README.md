@@ -350,7 +350,46 @@ Notes:
 - One token covers one Calendly organisation. Businesses on their own Calendly accounts will
   need OAuth (not built yet).
 
-## API Endpoints
+## WhatsApp Summaries
+
+Every business gets its call summaries by email. Businesses on **Aristeia** or **Axiom** can
+choose to get them by **WhatsApp**, **email**, or **both**. Callers never get WhatsApp messages.
+
+If a business chose WhatsApp only and it can't be delivered, the summary is emailed instead,
+so a message is never lost. Demo calls are always emailed (to you).
+
+### One-off setup
+
+1. **Meta Business verification** for your business, then register `TWILIO_PHONE_NUMBER` (or
+   another number) as a WhatsApp sender in Twilio (*Messaging → Senders → WhatsApp senders*).
+2. **Create the template** in Twilio (*Messaging → Content Template Builder*), category
+   *Utility*, language English (UK), then submit it to WhatsApp for approval:
+
+   > New call for {{1}}
+   > From: {{2}} ({{3}})
+   > Message: {{4}}
+   > Urgency: {{5}}
+
+   Variables: 1 business name, 2 caller name, 3 caller number, 4 message (any Calendly
+   booking comes first), 5 urgency.
+3. Set `TWILIO_WHATSAPP_FROM` (the sender, e.g. `+447700900000`) and
+   `TWILIO_WHATSAPP_TEMPLATE_SID` (the template's `HX…` SID). Without both, everyone is emailed.
+
+### Per business
+
+Get the business's agreement to receive WhatsApp messages first. Then:
+
+```bash
+curl -X PATCH $BASE_URL/api/businesses/the-crown \
+  -H "Authorization: Bearer $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"tier":"ARISTEIA","whatsappNumbers":["+447700900111"],"whatsappOptIn":true,"notifyChannel":"WHATSAPP"}'
+```
+
+- `notifyChannel`: `EMAIL` (default), `WHATSAPP` or `BOTH`. WhatsApp is refused on Agathos and Arete.
+- Up to 5 numbers. Changing them without `"whatsappOptIn": true` clears the opt-in (WhatsApp
+  stops and email takes over) until the new people have agreed.
+- Moving a business down to Agathos or Arete switches it back to email.
+
 
 ### Admin
 
@@ -440,6 +479,8 @@ The email includes:
 | `SLACK_WEBHOOK_URL`| No       | Slack notifications (optional)               |
 | `ALERT_SMS_NUMBER` | No       | SMS alert for urgent calls (optional)        |
 | `CALENDLY_API_TOKEN` | No     | Calendly booking on calls (see Calendly Appointments) |
+| `TWILIO_WHATSAPP_FROM` | No   | WhatsApp sender for call summaries (see WhatsApp Summaries) |
+| `TWILIO_WHATSAPP_TEMPLATE_SID` | No | Approved call summary template (`HX…`) |
 | `AGENT_PHONE_NUMBER` | No     | Your mobile: the cockpit rings it; an active demo only answers calls from it |
 | `CALLING_HOURS`    | No       | When the cockpit may dial prospects (UK time). Default `Mon-Fri 09:00-20:00; Sat 10:00-17:00` |
 | `RECORD_SALES_CALLS` | No     | `true` adds a Record button to the cockpit. Default `false` |

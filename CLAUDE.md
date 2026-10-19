@@ -50,6 +50,8 @@ src/services/cockpit.service.ts Calling cockpit: agent leg -> press 1 -> confere
 src/api/routes/cockpit.ts      Cockpit API (admin auth); page is public/cockpit.html at GET /cockpit
 src/lib/calling-hours.ts       CALLING_HOURS window (UK time)
 src/services/demo-builder.service.ts Research notes -> DEMO business profile (LLM)
+src/services/whatsapp.service.ts Call summaries by WhatsApp; which channel(s) a business gets
+src/lib/tiers.ts               Which tier has which feature (the only place to check tiers)
 src/api/routes/webhooks.ts     Twilio webhooks (signature-validated)
 src/api/routes/calls.ts        Admin API (Bearer ADMIN_API_KEY)
 src/api/routes/businesses.ts   Admin CRUD for businesses

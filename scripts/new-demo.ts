@@ -154,7 +154,7 @@ async function main() {
   printDraft(args.pubName, slug, args.persona, draft);
 
   const data = { name: args.pubName, personaName: args.persona, ...draft };
-  console.log(`\n  Greeting       "${buildGreeting({ ...data, id: null, slug, mode: 'DEMO', greeting: null, notifyEmail: null, calendlyEventType: null })}"`);
+  console.log(`\n  Greeting       "${buildGreeting({ ...data, mode: 'DEMO', greeting: null })}"`);
 
   const verb = existing ? 'Update the existing demo' : 'Save this demo';
   if (!args.yes && !(await confirm(`\n${verb}? [y/N] `))) {
