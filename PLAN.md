@@ -23,14 +23,46 @@ Each phase ends with something usable. Do them in order. Tick boxes as tasks are
 
 ---
 
+## Current focus (from 19 October 2026): sell, don't build
+
+**Code freeze.** Phases 1–3 are built and are enough to sell with. No new features until a pub
+agrees to a trial. The next 100 calls decide what gets built, not this plan.
+
+**Before the first real call (one or two evenings):**
+- [ ] Deploy, migrate and seed. One full test through the cockpit with a second phone as the "pub":
+      call, bring in demo, remove AI, log outcome.
+- [ ] Ring the Twilio number directly: the normal missed-call path still answers.
+- [ ] Share the Sheet with the service account; `npm run sheets:check` passes.
+- [ ] Screen every number against TPS/CTPS before calling it (by hand or a cheap screening
+      service; don't build this).
+
+**Gates:**
+- **After 10 calls:** at least 3 decision makers agree to hear the demo and 2+ ask about price or a
+  trial. If not, change the script, opening line or calling times. Not the code.
+- **After 30 calls:** write down the top objections word for word, the share who drop off at "AI",
+  and which kinds of pub react best.
+- **Calls 30–100:** ask for a free 2-week trial.
+
+**Build only once a pub says yes to a trial (and only this):**
+- [ ] Market-Ready B1: bookings in the live prompt (reuse the demo prompt).
+- [ ] Market-Ready B2: SMS to the manager for every booking.
+- [ ] Market-Ready B3: Twilio fallback URL on the number (config, not code).
+- [ ] ICO data protection fee paid before a live pub's callers' data goes through the system.
+- Trial onboarding for the first 3–5 pubs is done **by hand** (admin API + Twilio console), not
+  with a "Start trial" button.
+
+**Deferred until the first paying customer:** the four tiers in code, usage metering, customer
+dashboard, billing, limited company, insurance, DPAs. On calls, quote one simple price and note
+the reaction; that sets the per-minute rates later.
+
+---
+
 ## Phase 0: Prove it with no code (this week)
 
 Before building anything, test whether pub owners stay on the line.
 
-- [ ] Set `.env` for one real pub you've researched: `COMPANY_NAME`, `PERSONA_NAME`, and
-      temporarily edit the greeting in `buildGreeting()` to answer as the pub. Restart.
-- [ ] Call the pub from your mobile. When the owner agrees, tap **Add call**, dial the Twilio
-      number, tap **Merge**. Mute yourself while the AI talks.
+- [ ] ~~Env-var / Add call + Merge trick~~ superseded: the cockpit (Phase 3) now does this.
+      Build each demo with `npm run demo:new -- --from-sheet "<pub name>"` and call from `/cockpit`.
 - [ ] Do this with 10 pubs. Log every call in the Sheet's `Call Log` tab.
 - [ ] Decision gate: if at least 3 of the decision makers you reach agree to hear the demo and
       2 or more ask about price or a trial, continue to Phase 1. If not, fix the script first,
@@ -141,6 +173,10 @@ one page with no manual dialling or typing into the Sheet.
 
 ## Phase 4: Follow-ups and trial onboarding
 
+> **Deferred.** Nothing here starts until a pub agrees to a trial (see "Current focus"). Do the
+> first 3–5 trials by hand; build "Start trial" only once doing it by hand hurts. Use a Sheet
+> filter instead of the digest email, and research pubs by hand instead of the FSA script.
+
 - [ ] Daily 08:30 email digest (reuse `email.service`): follow-ups due today, callbacks, trials
       ending in the next 3 days. Read from the Sheet.
 - [ ] "Start trial" in the cockpit: copies the DEMO business to a LIVE business, asks for the
@@ -158,6 +194,8 @@ into a working trial takes under 10 minutes.
 ---
 
 ## After Phase 4
+
+> Not before the first paying customer.
 
 Continue with [`docs/MARKET-READY-PLAN.md`](docs/MARKET-READY-PLAN.md): bookings and instant SMS
 in the live product, safe failure and monitoring, UK compliance, tiers, usage metering, the
