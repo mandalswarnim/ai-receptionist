@@ -14,6 +14,7 @@ import * as conversationSvc from './conversation.service';
 import * as aiSvc from './ai.service';
 import * as callSvc from './call.service';
 import * as businessSvc from './business.service';
+import * as appointmentSvc from './appointment.service';
 import { startCallRecording, endCall } from './twilio.service';
 import { DtmfBuffer, formatDtmfUtterance } from '../lib/dtmf';
 
@@ -149,6 +150,7 @@ export function handleRelayConnection(ws: WebSocket): void {
     // Caller hung up while we loaded: nothing to set up, nothing to process
     if (ws.readyState !== ws.OPEN) return;
     conversationSvc.createSession(callSid, from, business);
+    appointmentSvc.prefetch(business);
     // The welcomeGreeting in the TwiML is spoken by Twilio directly;
     // record it so the transcript is complete.
     const greeting = aiSvc.buildGreeting(business);

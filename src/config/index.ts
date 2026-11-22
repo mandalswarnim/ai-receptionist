@@ -125,6 +125,18 @@ const configSchema = z.object({
   GOOGLE_SHEETS_ID: z.string().min(1).optional(),
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().min(1).optional(),
 
+  // Calendly appointment booking. A personal access token from the Calendly
+  // account (paid plan) that owns the event types businesses book into. Without
+  // it, no business offers appointments and calls take a message as before.
+  CALENDLY_API_TOKEN: z.string().min(1).optional(),
+
+  // WhatsApp call summaries (Aristeia and Axiom businesses that choose them).
+  // Both are needed; without them every business is emailed.
+  // The WhatsApp-enabled Twilio sender, e.g. +447700900000
+  TWILIO_WHATSAPP_FROM: z.string().regex(/^\+\d{7,15}$/, 'E.164, e.g. +447700900000').optional(),
+  // Content SID (HX...) of the Meta-approved call summary template (README → WhatsApp summaries)
+  TWILIO_WHATSAPP_TEMPLATE_SID: z.string().startsWith('HX').optional(),
+
   // Optional
   SLACK_WEBHOOK_URL: z.string().url().optional(),
   ALERT_SMS_NUMBER: z.string().startsWith('+').optional(),

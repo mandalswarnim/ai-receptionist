@@ -1,4 +1,4 @@
-import type { Business, BusinessMode, Prisma } from '@prisma/client';
+import type { Business, BusinessMode, NotifyChannel, Prisma, Tier } from '@prisma/client';
 import { z } from 'zod';
 import { config } from '../config';
 import { db } from '../lib/db';
@@ -32,6 +32,13 @@ export interface BusinessProfile {
   menuNotes: string | null;
   faqs: Faq[];
   notifyEmail: string | null;
+  /** Calendly event type callers can book into, when appointments are on. */
+  calendlyEventType: string | null;
+  tier: Tier;
+  /** Where call summaries go; WhatsApp only on tiers that include it. */
+  notifyChannel: NotifyChannel;
+  whatsappNumbers: string[];
+  whatsappOptInAt: Date | null;
 }
 
 const faqsSchema = z.array(z.object({ q: z.string(), a: z.string() })).catch([]);
@@ -51,6 +58,11 @@ export function toProfile(business: Business): BusinessProfile {
     menuNotes: business.menuNotes,
     faqs: faqsSchema.parse(business.faqs),
     notifyEmail: business.notifyEmail,
+    calendlyEventType: business.calendlyEventType,
+    tier: business.tier,
+    notifyChannel: business.notifyChannel,
+    whatsappNumbers: business.whatsappNumbers,
+    whatsappOptInAt: business.whatsappOptInAt,
   };
 }
 
@@ -88,6 +100,11 @@ export function envFallbackProfile(): BusinessProfile {
     menuNotes: null,
     faqs: [],
     notifyEmail: config.BUSINESS_EMAIL,
+    calendlyEventType: null,
+    tier: 'AGATHOS',
+    notifyChannel: 'EMAIL',
+    whatsappNumbers: [],
+    whatsappOptInAt: null,
   };
 }
 

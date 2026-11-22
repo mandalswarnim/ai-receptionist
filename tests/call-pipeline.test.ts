@@ -16,6 +16,11 @@ const LIVE_BUSINESS: BusinessProfile = {
   menuNotes: null,
   faqs: [],
   notifyEmail: 'owner@acme.test',
+  calendlyEventType: null,
+  tier: 'AGATHOS',
+  notifyChannel: 'EMAIL',
+  whatsappNumbers: [],
+  whatsappOptInAt: null,
 };
 
 const mocks = vi.hoisted(() => ({
@@ -32,6 +37,8 @@ const mocks = vi.hoisted(() => ({
   extract: vi.fn(),
   sendEmail: vi.fn(),
   appendCallLog: vi.fn(),
+  channels: vi.fn(),
+  sendWhatsApp: vi.fn(),
 }));
 
 vi.mock('../src/config', () => ({ config: mocks.config }));
@@ -74,6 +81,10 @@ vi.mock('../src/services/ai.service', async () => ({
 vi.mock('../src/services/email.service', () => ({ sendCallSummaryEmail: mocks.sendEmail }));
 vi.mock('../src/services/slack.service', () => ({ sendSlackNotification: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../src/services/twilio.service', () => ({ sendUrgentSms: vi.fn() }));
+vi.mock('../src/services/whatsapp.service', () => ({
+  summaryChannels: mocks.channels,
+  sendWhatsAppSummary: mocks.sendWhatsApp,
+}));
 // A stored business stands in for its own profile; older calls get the default
 vi.mock('../src/services/sheets.service', () => ({
   getSheets: () => ({ appendCallLog: mocks.appendCallLog }),
@@ -126,6 +137,8 @@ beforeEach(() => {
   mocks.sendEmail.mockResolvedValue(undefined);
   mocks.updateMany.mockResolvedValue({ count: 1 });
   mocks.appendCallLog.mockResolvedValue(2);
+  mocks.channels.mockReturnValue({ email: true, whatsapp: false });
+  mocks.sendWhatsApp.mockResolvedValue(undefined);
 });
 
 describe('processCompletedCall', () => {
@@ -178,6 +191,23 @@ describe('processCompletedCall', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
+  it('states an appointment booked on the call at the top of the message', async () => {
+    const booked = {
+      startTime: '2026-10-20T13:00:00.000Z',
+      label: 'Tuesday 20 October at 2:00 pm',
+      name: 'James Smith',
+      email: 'james@example.com',
+      eventUri: 'https://api.calendly.com/scheduled_events/EV1',
+    };
+
+    await processCompletedCall({ ...state(), appointment: { offered: [], booked } });
+
+    expect(mocks.sendEmail.mock.calls[0][0].message).toBe(
+      'Appointment booked in Calendly for Tuesday 20 October at 2:00 pm (James Smith, james@example.com). ' +
+        'James is calling about his invoice.'
+    );
+  });
+
   it('links the call to its business and emails for that business', async () => {
     const demo = { ...LIVE_BUSINESS, id: 'biz-crown', name: 'The Crown', mode: 'DEMO' as const };
 
@@ -227,6 +257,53 @@ describe('processCompletedCall', () => {
   });
 });
 
+describe('summary by WhatsApp', () => {
+  it('sends only the WhatsApp when the business chose it, and records it', async () => {
+    mocks.channels.mockReturnValue({ email: false, whatsapp: true });
+
+    await processCompletedCall(state());
+
+    expect(mocks.sendWhatsApp).toHaveBeenCalledWith(expect.objectContaining({ name: 'James' }), 'CA123', LIVE_BUSINESS);
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledWith({ where: { callSid: 'CA123' }, data: { whatsappSentAt: expect.any(Date) } });
+  });
+
+  it('sends both when the business chose both', async () => {
+    mocks.channels.mockReturnValue({ email: true, whatsapp: true });
+
+    await processCompletedCall(state());
+
+    expect(mocks.sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mocks.update.mock.calls[0][0].data).toEqual({
+      emailSent: true,
+      emailSentAt: expect.any(Date),
+      whatsappSentAt: expect.any(Date),
+    });
+  });
+
+  it('emails instead when the WhatsApp fails', async () => {
+    mocks.channels.mockReturnValue({ email: false, whatsapp: true });
+    mocks.sendWhatsApp.mockRejectedValue(new Error('63016'));
+
+    await processCompletedCall(state());
+
+    expect(mocks.sendWhatsApp).toHaveBeenCalledTimes(2); // retried once
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mocks.update.mock.calls[0][0].data).toEqual({ emailSent: true, emailSentAt: expect.any(Date) });
+  });
+
+  it('a WhatsApp failure does not affect the email when both were chosen', async () => {
+    mocks.channels.mockReturnValue({ email: true, whatsapp: true });
+    mocks.sendWhatsApp.mockRejectedValue(new Error('63016'));
+
+    await processCompletedCall(state());
+
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
+    expect(mocks.update.mock.calls[0][0].data).toEqual({ emailSent: true, emailSentAt: expect.any(Date) });
+  });
+});
+
 describe('resendPendingEmails', () => {
   const row = {
     id: 'call-1',
@@ -250,6 +327,8 @@ describe('resendPendingEmails', () => {
 
     const where = mocks.findMany.mock.calls[0][0].where;
     expect(where).toMatchObject({ status: 'COMPLETED', emailSent: false, summary: { not: null } });
+    // Summaries that went by WhatsApp only are not emailed again
+    expect(where.OR).toEqual([{ whatsappSentAt: null }, { business: { notifyChannel: 'BOTH' } }]);
     expect(mocks.sendEmail.mock.calls[0][0]).toMatchObject({ name: 'James', urgency: 'high' });
     expect(mocks.sendEmail.mock.calls[0][3]).toBe(LIVE_BUSINESS);
     expect(mocks.update).toHaveBeenCalledWith({

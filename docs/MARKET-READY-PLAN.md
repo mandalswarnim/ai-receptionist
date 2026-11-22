@@ -183,7 +183,8 @@ Email is read the next morning. A booking request needs a phone in someone's poc
       every urgent message, within ~30 seconds of the call ending. Short: "Booking: Sarah, 4 ppl,
       Sat 18 Oct 7:30pm, 07700 900123. Reply or call to confirm."
 - [ ] Optional: SMS confirmation to the **caller** once the pub confirms (later, needs a reply flow).
-- [ ] WhatsApp later (needs Meta business verification and templates).
+- [x] WhatsApp call summaries for Aristeia/Axiom; the business picks email, WhatsApp or both
+      (needs Meta business verification and an approved template; README → WhatsApp summaries).
 - [ ] Email stays as the full record.
 
 ### B3. Safe failure (must-have) — config + code
@@ -334,8 +335,9 @@ processor**.
 
 ### D1. Tiers in the product — code
 
-- [ ] `Business.tier` (AGATHOS | ARETE | ARISTEIA | AXIOM) and a single place that says which
-      features each tier has. Features check the tier, not ad-hoc flags.
+- [x] `Business.tier` (AGATHOS | ARETE | ARISTEIA | AXIOM) and a single place that says which
+      features each tier has. Features check the tier, not ad-hoc flags. _`src/lib/tiers.ts`;
+      WhatsApp alerts are the first feature gated by it._
 - [ ] Gate the features from the tier table (e.g. bookings and SMS alerts only from Arete).
 - [ ] Changing tier takes effect from the next call; the bill splits minutes by tier.
 

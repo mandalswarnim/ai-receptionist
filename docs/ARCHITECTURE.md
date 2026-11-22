@@ -57,6 +57,7 @@ flowchart LR
 | Business routing | `src/services/business.service.ts` | Decides which business a call is for; default business seeded from env. |
 | Demo state | `src/services/demo.service.ts` | Active demo (30-min TTL) and the cockpit's one-off demo hand-off. In memory. |
 | Prompts | `src/services/ai.service.ts` | LIVE prompt (take a message) and DEMO prompt (bookings, FAQs, answer as the pub); greetings; post-call extraction. |
+| Appointments | `src/services/appointment.service.ts`, `src/services/calendly.service.ts` | Calendly booking on live calls: tools (check availability, book, text link), prompt section, guard rails. Off unless the business has `calendlyEventType`. |
 | Live call loop | `src/services/relay.service.ts` | ConversationRelay WebSocket: streaming replies, barge-in, keypad, silence and time limits. |
 | Webhooks | `src/api/routes/webhooks.ts` | Twilio callbacks (signature-validated): incoming call, Gather fallback, recording, status, cockpit legs. |
 | Post-call pipeline | `src/services/call.service.ts` | Recording → transcript → extraction → DB → email/Slack/SMS → Call Log (demo calls). |
